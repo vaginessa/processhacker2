@@ -47,14 +47,15 @@
 
 #define SETTING_NAME_TRACERT_WINDOW_POSITION (PLUGIN_NAME L".TracertWindowPosition")
 #define SETTING_NAME_TRACERT_WINDOW_SIZE (PLUGIN_NAME L".TracertWindowSize")
-#define SETTING_NAME_TRACERT_MENU (PLUGIN_NAME L".TracertAddresses")
+#define SETTING_NAME_TRACERT_COLUMNS (PLUGIN_NAME L".TracertColumns")
+#define SETTING_NAME_TRACERT_HISTORY (PLUGIN_NAME L".TracertAddresses")
 
 // ICMP Packet Length: (msdn: IcmpSendEcho2/Icmp6SendEcho2)
 // The buffer must be large enough to hold at least one ICMP_ECHO_REPLY or ICMPV6_ECHO_REPLY structure
 //       + the number of bytes of data specified in the RequestSize parameter.
 // This buffer should also be large enough to also hold 8 more bytes of data (the size of an ICMP error message)
 //       + space for an IO_STATUS_BLOCK structure.
-#define ICMP_BUFFER_SIZE(EchoReplyLength, Buffer) (ULONG)(((EchoReplyLength) + (Buffer)->Length) + 8 + sizeof(IO_STATUS_BLOCK))
+#define ICMP_BUFFER_SIZE(EchoReplyLength, Buffer) (ULONG)(((EchoReplyLength) + (Buffer)->Length) + 8 + sizeof(IO_STATUS_BLOCK) + MAX_OPT_SIZE)
 
 // The ICMPV6_ECHO_REPLY struct doesn't have a field to access the reply data,
 // so copy the struct and add an additional Data field.

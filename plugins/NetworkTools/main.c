@@ -61,7 +61,7 @@ VOID NTAPI MenuItemCallback(
             PH_CHOICE_DIALOG_USER_CHOICE,
             &selectedChoice,
             NULL,
-            SETTING_NAME_TRACERT_MENU
+            SETTING_NAME_TRACERT_HISTORY
             ))
         {
             PWSTR terminator = NULL;
@@ -173,13 +173,15 @@ LOGICAL DllMain(
             PPH_PLUGIN_INFORMATION info;
             PH_SETTING_CREATE settings[] =
             {
-                { IntegerPairSettingType, SETTING_NAME_TRACERT_WINDOW_POSITION, L"0,0" },
-                { ScalableIntegerPairSettingType, SETTING_NAME_TRACERT_WINDOW_SIZE, L"@96|600,365" },
                 { IntegerPairSettingType, SETTING_NAME_PING_WINDOW_POSITION, L"0,0" },
                 { ScalableIntegerPairSettingType, SETTING_NAME_PING_WINDOW_SIZE, L"@96|420,250" },
                 { IntegerSettingType, SETTING_NAME_PING_MINIMUM_SCALING, L"64" }, // 100ms minimum scaling
                 { IntegerSettingType, SETTING_NAME_PING_SIZE, L"20" }, // 32 byte packet
-                { StringSettingType, SETTING_NAME_TRACERT_MENU, L"" }
+
+                { IntegerPairSettingType, SETTING_NAME_TRACERT_WINDOW_POSITION, L"0,0" },
+                { ScalableIntegerPairSettingType, SETTING_NAME_TRACERT_WINDOW_SIZE, L"@96|600,365" },
+                { StringSettingType, SETTING_NAME_TRACERT_COLUMNS, L"" },
+                { StringSettingType, SETTING_NAME_TRACERT_HISTORY, L"" },
             };
 
             PluginInstance = PhRegisterPlugin(PLUGIN_NAME, Instance, &info);

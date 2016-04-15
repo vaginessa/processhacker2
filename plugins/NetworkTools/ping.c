@@ -61,6 +61,7 @@ NTSTATUS NetworkPingThreadStart(
         IP_FLAG_DF,  // IP header flags
         0            // Size of options data
     };
+    //pingOptions.Flags |= IP_FLAG_REVERSE;
 
     PNETWORK_OUTPUT_CONTEXT context = (PNETWORK_OUTPUT_CONTEXT)Parameter;
 

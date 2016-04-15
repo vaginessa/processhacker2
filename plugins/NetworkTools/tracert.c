@@ -33,13 +33,23 @@
 #define DEFAULT_TIMEOUT 4000
 #define MIN_INTERVAL    1000
 
-
 #define MAX_PINGS  3
 #define IP_ADDRESS_COLUMN (MAX_PINGS + 1)
 #define HOSTNAME_COLUMN (MAX_PINGS + 2)
 
+typedef struct _TRACERT_RESOLVE_WORKITEM
+{
+    HWND LvHandle;
+    INT LvItemIndex;
 
-PPH_STRING PhGetWinsockErrorMessage(
+    ULONG Type;
+    SOCKADDR_STORAGE SocketAddress;
+} TRACERT_RESOLVE_WORKITEM, *PTRACERT_RESOLVE_WORKITEM;
+
+
+
+
+PPH_STRING TracertGetErrorMessage(
     _In_ ULONG Result
     )
 {
@@ -65,7 +75,7 @@ PPH_STRING PhGetWinsockErrorMessage(
 }
 
 
-static VOID TracertUpdateTime(
+VOID TracertUpdateTime(
     _In_ PNETWORK_OUTPUT_CONTEXT Context,
     _In_ INT Index,
     _In_ INT SubIndex,
@@ -74,26 +84,14 @@ static VOID TracertUpdateTime(
 { 
     if (RoundTripTime)
     { 
-        //SendOutputStringFormat(Context, PhFormatString(L"%4lu ms  ", Time)); 
         PhSetListViewSubItem(Context->OutputHandle, Index, SubIndex, PhFormatString(L"%lu ms", RoundTripTime)->Buffer);
     } 
     else 
     { 
-        //SendOutputStringFormat(Context, PhFormatString(L"  <1 ms  " )); 
         PhSetListViewSubItem(Context->OutputHandle, Index, SubIndex, PhFormatString(L"<1 ms", RoundTripTime)->Buffer);
     } 
 } 
 
-
-
-
-
-typedef struct _TRACERT_RESOLVE_WORKITEM
-{
-    HWND LvHandle;
-    INT LvItemIndex;
-    SOCKADDR_IN sockAddrIn;
-} TRACERT_RESOLVE_WORKITEM, *PTRACERT_RESOLVE_WORKITEM;
 
 
 static NTSTATUS TracertHostnameLookupCallback(
@@ -101,29 +99,53 @@ static NTSTATUS TracertHostnameLookupCallback(
     )
 {
     PTRACERT_RESOLVE_WORKITEM workItem = Parameter;
+    BOOLEAN success = FALSE;
     WSADATA winsockStartup;
-    WCHAR hostname[NI_MAXHOST] = L"";
+    WCHAR ipAddrHostname[NI_MAXHOST] = L"";
 
     if (WSAStartup(WINSOCK_VERSION, &winsockStartup) != ERROR_SUCCESS)
         return STATUS_UNEXPECTED_NETWORK_ERROR;
 
-    if (!GetNameInfo(
-        (PSOCKADDR)&workItem->sockAddrIn, 
-        sizeof(SOCKADDR_IN), 
-        hostname, 
-        ARRAYSIZE(hostname), 
-        NULL, 
-        0,
-        NI_NAMEREQD
-        ))
+    if (workItem->Type == PH_IPV4_NETWORK_TYPE)
     {
-        PhSetListViewSubItem(workItem->LvHandle, workItem->LvItemIndex, HOSTNAME_COLUMN, hostname);
+        if (!GetNameInfo(
+            (PSOCKADDR)&workItem->SocketAddress,
+            sizeof(SOCKADDR_IN),
+            ipAddrHostname,
+            ARRAYSIZE(ipAddrHostname),
+            NULL,
+            0,
+            NI_NAMEREQD
+            ))
+        {
+            success = TRUE;
+        }
+    }
+    else if (workItem->Type == PH_IPV6_NETWORK_TYPE)
+    {
+        if (!GetNameInfo(
+            (PSOCKADDR)&workItem->SocketAddress,
+            sizeof(SOCKADDR_IN6),
+            ipAddrHostname,
+            ARRAYSIZE(ipAddrHostname),
+            NULL,
+            0,
+            NI_NAMEREQD
+            ))
+        {
+            success = TRUE;
+        }
+    }
+
+    if (success)
+    {
+        PhSetListViewSubItem(workItem->LvHandle, workItem->LvItemIndex, HOSTNAME_COLUMN, ipAddrHostname);
     }
     else
     {
         ULONG errorCode = WSAGetLastError();
 
-        if (errorCode != WSAHOST_NOT_FOUND)
+        if (errorCode != WSAHOST_NOT_FOUND && errorCode != WSATRY_AGAIN)
         {
             PPH_STRING errorMessage = PhGetWin32Message(errorCode);
             PhSetListViewSubItem(workItem->LvHandle, workItem->LvItemIndex, HOSTNAME_COLUMN, errorMessage->Buffer);
@@ -142,10 +164,10 @@ static NTSTATUS TracertHostnameLookupCallback(
     return STATUS_SUCCESS;
 }
 
-static void QueueTracertItem(
+VOID TracertQueueIpv4HostnameLookup(
     _In_ PNETWORK_OUTPUT_CONTEXT Context,
     _In_ INT LvItemIndex,
-    _In_ IPAddr ipv4Addr
+    _In_ IN_ADDR ipv4Addr
     )
 {
     PTRACERT_RESOLVE_WORKITEM workItem;
@@ -155,52 +177,72 @@ static void QueueTracertItem(
 
     workItem->LvHandle = Context->OutputHandle;
     workItem->LvItemIndex = LvItemIndex;
-    workItem->sockAddrIn.sin_family = AF_INET;
-    workItem->sockAddrIn.sin_addr.s_addr = ipv4Addr;
+    workItem->Type = PH_IPV4_NETWORK_TYPE;
+
+    ((PSOCKADDR_IN)&workItem->SocketAddress)->sin_family = AF_INET;
+    ((PSOCKADDR_IN)&workItem->SocketAddress)->sin_addr = ipv4Addr;
 
     PhQueueItemWorkQueue(PhGetGlobalWorkQueue(), TracertHostnameLookupCallback, workItem);
 }
 
-
-static VOID TracertShowIpv4Address(
+VOID TracertQueueIpv6HostnameLookup(
     _In_ PNETWORK_OUTPUT_CONTEXT Context,
     _In_ INT LvItemIndex,
-    _In_ IPAddr ipv4Addr
-    ) 
-{ 
-    IN_ADDR sockAddrIn;
-    WCHAR addressString[INET6_ADDRSTRLEN + 1];
+    _In_ IN6_ADDR ipv6Addr
+    )
+{
+    PTRACERT_RESOLVE_WORKITEM workItem;
 
-    memset(&sockAddrIn, 0, sizeof(IN_ADDR));
-    memcpy(&sockAddrIn.s_addr, &ipv4Addr, sizeof(IPAddr));
+    workItem = PhAllocate(sizeof(TRACERT_RESOLVE_WORKITEM));
+    memset(workItem, 0, sizeof(TRACERT_RESOLVE_WORKITEM));
 
-    RtlIpv4AddressToString(&sockAddrIn, addressString);
+    workItem->LvHandle = Context->OutputHandle;
+    workItem->LvItemIndex = LvItemIndex;
+    workItem->Type = PH_IPV6_NETWORK_TYPE;
 
-    PhSetListViewSubItem(Context->OutputHandle, LvItemIndex, IP_ADDRESS_COLUMN, addressString);
-    PhSetListViewSubItem(Context->OutputHandle, LvItemIndex, HOSTNAME_COLUMN, L"Resolving address...");
+    ((PSOCKADDR_IN6)&workItem->SocketAddress)->sin6_family = AF_INET6;
+    ((PSOCKADDR_IN6)&workItem->SocketAddress)->sin6_addr = ipv6Addr;
 
-    QueueTracertItem(Context, LvItemIndex, ipv4Addr);
+    PhQueueItemWorkQueue(PhGetGlobalWorkQueue(), TracertHostnameLookupCallback, workItem);
 }
 
-static VOID TracertShowIpv6Address(
+VOID TracertShowIpAddress(
     _In_ PNETWORK_OUTPUT_CONTEXT Context,
     _In_ INT LvItemIndex,
-    _In_ PIN6_ADDR ipv6Addr
+    _In_ PVOID IpAddr
     ) 
-{ 
-    IN6_ADDR sockAddrIn6;
-    WCHAR addressString[INET6_ADDRSTRLEN + 1];
+{
+    if (Context->RemoteEndpoint.Address.Type == PH_IPV4_NETWORK_TYPE)
+    {
+        IN_ADDR sockAddrIn;
+        WCHAR addressString[INET6_ADDRSTRLEN + 1];
 
-    memset(&sockAddrIn6, 0, sizeof(IN6_ADDR));
-    memcpy(&sockAddrIn6, ipv6Addr, sizeof(IN6_ADDR));
+        memset(&sockAddrIn, 0, sizeof(IN_ADDR));
+        memcpy(&sockAddrIn.s_addr, IpAddr, sizeof(IPAddr));
 
-    RtlIpv6AddressToString(ipv6Addr, addressString);
+        RtlIpv4AddressToString(&sockAddrIn, addressString);
 
-    PhSetListViewSubItem(Context->OutputHandle, LvItemIndex, IP_ADDRESS_COLUMN, addressString);
-    PhSetListViewSubItem(Context->OutputHandle, LvItemIndex, HOSTNAME_COLUMN, L"Resolving address...");
+        PhSetListViewSubItem(Context->OutputHandle, LvItemIndex, IP_ADDRESS_COLUMN, addressString);
+        PhSetListViewSubItem(Context->OutputHandle, LvItemIndex, HOSTNAME_COLUMN, L"Resolving address...");
+
+        TracertQueueIpv4HostnameLookup(Context, LvItemIndex, sockAddrIn);
+    }
+    else if (Context->RemoteEndpoint.Address.Type == PH_IPV6_NETWORK_TYPE)
+    {
+        IN6_ADDR sockAddrIn6;
+        WCHAR addressString[INET6_ADDRSTRLEN + 1];
+
+        memset(&sockAddrIn6, 0, sizeof(IN6_ADDR));
+        memcpy(&sockAddrIn6, IpAddr, sizeof(IN6_ADDR));
+
+        RtlIpv6AddressToString(&sockAddrIn6, addressString);
+
+        PhSetListViewSubItem(Context->OutputHandle, LvItemIndex, IP_ADDRESS_COLUMN, addressString);
+        PhSetListViewSubItem(Context->OutputHandle, LvItemIndex, HOSTNAME_COLUMN, L"Resolving address...");
+
+        TracertQueueIpv6HostnameLookup(Context, LvItemIndex, sockAddrIn6);
+    }
 }
-
-
 
 VOID TracertConvertEndpointToStorage(
     _In_ PNETWORK_OUTPUT_CONTEXT Context,
@@ -230,9 +272,6 @@ static BOOLEAN RunTraceRoute(
     HANDLE IcmpHandle = INVALID_HANDLE_VALUE;
     SOCKADDR_STORAGE sourceAddress = { 0 };
     SOCKADDR_STORAGE destinationAddress = { 0 };
-
-    //BYTE SendBuffer[DEFAULT_SEND_SIZE] = "";
-    //BYTE RcvBuffer[DEFAULT_RECEIVE_SIZE] = "";
 
     ULONG icmpReplyLength = 0;
     PVOID icmpReplyBuffer = NULL;
@@ -377,17 +416,17 @@ static BOOLEAN RunTraceRoute(
                         {
                             if (haveReply)
                             {
-                                TracertShowIpv4Address(Context, lvItemIndex, reply4Address);
+                                TracertShowIpAddress(Context, lvItemIndex, &reply4Address);
                             }
                             else
                             {
-                                PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, PhGetWinsockErrorMessage(GetLastError())->Buffer);
+                                PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, TracertGetErrorMessage(GetLastError())->Buffer);
                             }
                         }
                     }
                     else
                     {
-                        PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, PhGetWinsockErrorMessage(GetLastError())->Buffer);
+                        PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, TracertGetErrorMessage(GetLastError())->Buffer);
                     }
                 }
                 else
@@ -401,7 +440,7 @@ static BOOLEAN RunTraceRoute(
          
                         if (i == (MAX_PINGS - 1))
                         {
-                            TracertShowIpv4Address(Context, lvItemIndex, reply4->Address);
+                            TracertShowIpAddress(Context, lvItemIndex, &reply4->Address);
                             goto loop_end;
                         }
                         else
@@ -416,7 +455,7 @@ static BOOLEAN RunTraceRoute(
      
                         if (i == (MAX_PINGS - 1))
                         {
-                            TracertShowIpv4Address(Context, lvItemIndex, reply4->Address);
+                            TracertShowIpAddress(Context, lvItemIndex, &reply4->Address);
 
                             if (reply4->RoundTripTime < MIN_INTERVAL)
                             {
@@ -431,7 +470,7 @@ static BOOLEAN RunTraceRoute(
                     }
                     else
                     {
-                        PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, PhGetWinsockErrorMessage(GetLastError())->Buffer);
+                        PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, TracertGetErrorMessage(GetLastError())->Buffer);
                     }
                 }
             }
@@ -464,17 +503,17 @@ static BOOLEAN RunTraceRoute(
                         {
                             if (haveReply)
                             {
-                                TracertShowIpv6Address(Context, lvItemIndex, &reply6Address);
+                                TracertShowIpAddress(Context, lvItemIndex, &reply6Address);
                             }
                             else
                             {
-                                PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, PhGetWinsockErrorMessage(GetLastError())->Buffer);
+                                PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, TracertGetErrorMessage(GetLastError())->Buffer);
                             }
                         }
                     }
                     else
                     {
-                        PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, PhGetWinsockErrorMessage(GetLastError())->Buffer);
+                        PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, TracertGetErrorMessage(GetLastError())->Buffer);
                     }
                 }
                 else
@@ -487,7 +526,7 @@ static BOOLEAN RunTraceRoute(
 
                         if (i == (MAX_PINGS - 1))
                         { 
-                            TracertShowIpv6Address(Context, lvItemIndex, (PIN6_ADDR)&reply6->Address.sin6_addr);
+                            TracertShowIpAddress(Context, lvItemIndex, (PIN6_ADDR)&reply6->Address.sin6_addr);
                             goto loop_end; 
                         } 
                         else 
@@ -502,7 +541,7 @@ static BOOLEAN RunTraceRoute(
 
                         if (i == (MAX_PINGS - 1))
                         { 
-                            TracertShowIpv6Address(Context, lvItemIndex, (PIN6_ADDR)&reply6->Address.sin6_addr);
+                            TracertShowIpAddress(Context, lvItemIndex, (PIN6_ADDR)&reply6->Address.sin6_addr);
      
                             if (reply6->RoundTripTime < MIN_INTERVAL)
                             { 
@@ -517,7 +556,7 @@ static BOOLEAN RunTraceRoute(
                     } 
                     else 
                     { 
-                        PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, PhGetWinsockErrorMessage(GetLastError())->Buffer);
+                        PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, TracertGetErrorMessage(GetLastError())->Buffer);
                     } 
                 }
             }
@@ -584,6 +623,7 @@ INT_PTR CALLBACK TracertDlgProc(
 
         if (uMsg == WM_DESTROY)
         {
+            PhSaveListViewColumnsToSetting(SETTING_NAME_TRACERT_COLUMNS, context->OutputHandle);
             PhSaveWindowPlacementToSetting(SETTING_NAME_TRACERT_WINDOW_POSITION, SETTING_NAME_TRACERT_WINDOW_SIZE, hwndDlg);
             PhDeleteLayoutManager(&context->LayoutManager);
 
@@ -652,6 +692,7 @@ INT_PTR CALLBACK TracertDlgProc(
             PhAddListViewColumn(context->OutputHandle, IP_ADDRESS_COLUMN, IP_ADDRESS_COLUMN, IP_ADDRESS_COLUMN, LVCFMT_LEFT, 120, L"Ip Address");
             PhAddListViewColumn(context->OutputHandle, HOSTNAME_COLUMN, HOSTNAME_COLUMN, HOSTNAME_COLUMN, LVCFMT_LEFT, 240, L"Hostname");
             PhSetExtendedListView(context->OutputHandle);
+            PhLoadListViewColumnsFromSetting(SETTING_NAME_TRACERT_COLUMNS, context->OutputHandle);
 
             PhInitializeLayoutManager(&context->LayoutManager, hwndDlg);
             PhAddLayoutItem(&context->LayoutManager, context->OutputHandle, NULL, PH_ANCHOR_ALL);
@@ -716,7 +757,7 @@ INT_PTR CALLBACK TracertDlgProc(
             {
                 Static_SetText(
                     context->WindowHandle,
-                    PhaFormatString(L"%s Finished.", windowText->Buffer)->Buffer
+                    PhaFormatString(L"%s complete.", windowText->Buffer)->Buffer
                     );
                 PhDereferenceObject(windowText);
             }
@@ -727,7 +768,7 @@ INT_PTR CALLBACK TracertDlgProc(
             {
                 Static_SetText(
                     GetDlgItem(hwndDlg, IDC_STATUS),
-                    PhaFormatString(L"%s Finished.", windowText->Buffer)->Buffer
+                    PhaFormatString(L"%s complete.", windowText->Buffer)->Buffer
                     );
                 PhDereferenceObject(windowText);
             }
