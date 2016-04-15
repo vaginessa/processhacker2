@@ -40,10 +40,6 @@ VOID NetworkPingUpdateGraph(
     InvalidateRect(Context->PingGraphHandle, NULL, FALSE);
 }
 
-
-
-
-
 NTSTATUS NetworkPingThreadStart(
     _In_ PVOID Parameter
     )
