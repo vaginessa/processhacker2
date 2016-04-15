@@ -5,6 +5,7 @@
 #define IDD_OUTPUT                      101
 #define IDD_PINGDIALOG                  102
 #define IDD_OPTIONS                     103
+#define IDD_TRACERT                     104
 #define IDC_PINGPACKETLENGTH            1008
 #define IDC_NETOUTPUTEDIT               1009
 #define IDC_MINSCALING                  1009
@@ -19,14 +20,15 @@
 #define IDC_PINGS_SENT                  1020
 #define IDC_PING_LAYOUT                 1021
 #define IDC_BAD_HASH                    1022
+#define IDC_STATUS                      1023
 
 // Next default values for new objects
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        104
+#define _APS_NEXT_RESOURCE_VALUE        106
 #define _APS_NEXT_COMMAND_VALUE         40001
-#define _APS_NEXT_CONTROL_VALUE         1022
+#define _APS_NEXT_CONTROL_VALUE         1024
 #define _APS_NEXT_SYMED_VALUE           104
 #endif
 #endif

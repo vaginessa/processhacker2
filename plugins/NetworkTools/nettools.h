@@ -39,12 +39,15 @@
 #include "resource.h"
 
 #define PLUGIN_NAME L"ProcessHacker.NetworkTools"
-#define SETTING_NAME_TRACERT_WINDOW_POSITION (PLUGIN_NAME L".WindowPosition")
-#define SETTING_NAME_TRACERT_WINDOW_SIZE (PLUGIN_NAME L".WindowSize")
+
 #define SETTING_NAME_PING_WINDOW_POSITION (PLUGIN_NAME L".PingWindowPosition")
 #define SETTING_NAME_PING_WINDOW_SIZE (PLUGIN_NAME L".PingWindowSize")
 #define SETTING_NAME_PING_MINIMUM_SCALING (PLUGIN_NAME L".PingMinScaling")
 #define SETTING_NAME_PING_SIZE (PLUGIN_NAME L".PingSize")
+
+#define SETTING_NAME_TRACERT_WINDOW_POSITION (PLUGIN_NAME L".TracertWindowPosition")
+#define SETTING_NAME_TRACERT_WINDOW_SIZE (PLUGIN_NAME L".TracertWindowSize")
+#define SETTING_NAME_TRACERT_MENU (PLUGIN_NAME L".TracertAddresses")
 
 // ICMP Packet Length: (msdn: IcmpSendEcho2/Icmp6SendEcho2)
 // The buffer must be large enough to hold at least one ICMP_ECHO_REPLY or ICMPV6_ECHO_REPLY structure
@@ -71,7 +74,8 @@ typedef enum _PH_NETWORK_ACTION
     NETWORK_ACTION_TRACEROUTE,
     NETWORK_ACTION_WHOIS,
     NETWORK_ACTION_FINISH,
-    NETWORK_ACTION_PATHPING
+    NETWORK_ACTION_PATHPING,
+    MAINMENU_ACTION_TRACERT
 } PH_NETWORK_ACTION;
 
 // output
@@ -108,8 +112,8 @@ typedef struct _NETWORK_OUTPUT_CONTEXT
     PH_CIRCULAR_BUFFER_ULONG PingHistory;
     PH_CALLBACK_REGISTRATION ProcessesUpdatedRegistration;
 
-    PPH_NETWORK_ITEM NetworkItem;
-    PH_IP_ADDRESS IpAddress;
+    //PPH_NETWORK_ITEM NetworkItem;
+    PH_IP_ENDPOINT RemoteEndpoint;
     WCHAR IpAddressString[INET6_ADDRSTRLEN + 1];
 } NETWORK_OUTPUT_CONTEXT, *PNETWORK_OUTPUT_CONTEXT;
 
@@ -143,6 +147,14 @@ INT_PTR CALLBACK NetworkOutputDlgProc(
     _In_ UINT uMsg,
     _In_ WPARAM wParam,
     _In_ LPARAM lParam
+    );
+
+VOID ShowTracertWindow(
+    _In_ PPH_NETWORK_ITEM NetworkItem
+    );
+
+VOID ShowTracertWindowFromAddress(
+    _In_ PH_IP_ENDPOINT RemoteEndpoint
     );
 
 #endif

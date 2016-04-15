@@ -45,7 +45,7 @@ INT_PTR CALLBACK NetworkOutputDlgProc(
 
         if (uMsg == WM_DESTROY)
         {
-            PhSaveWindowPlacementToSetting(SETTING_NAME_TRACERT_WINDOW_POSITION, SETTING_NAME_TRACERT_WINDOW_SIZE, hwndDlg);
+            //PhSaveWindowPlacementToSetting(SETTING_NAME_TRACERT_WINDOW_POSITION, SETTING_NAME_TRACERT_WINDOW_SIZE, hwndDlg);
             PhDeleteLayoutManager(&context->LayoutManager);
 
             if (context->ProcessHandle)
@@ -111,13 +111,13 @@ INT_PTR CALLBACK NetworkOutputDlgProc(
                 PhLoadWindowPlacementFromSetting(SETTING_NAME_TRACERT_WINDOW_POSITION, SETTING_NAME_TRACERT_WINDOW_SIZE, hwndDlg);
             }
 
-            if (context->IpAddress.Type == PH_IPV4_NETWORK_TYPE)
+            if (context->RemoteEndpoint.Address.Type == PH_IPV4_NETWORK_TYPE)
             {
-                RtlIpv4AddressToString(&context->IpAddress.InAddr, context->IpAddressString);
+                RtlIpv4AddressToString(&context->RemoteEndpoint.Address.InAddr, context->IpAddressString);
             }
             else
             {
-                RtlIpv6AddressToString(&context->IpAddress.In6Addr, context->IpAddressString);
+                RtlIpv6AddressToString(&context->RemoteEndpoint.Address.In6Addr, context->IpAddressString);
             }
 
             switch (context->Action)
@@ -231,51 +231,45 @@ INT_PTR CALLBACK NetworkOutputDlgProc(
         break;
     case NTM_RECEIVEDTRACE:
         {
-            OEM_STRING inputString;
-            UNICODE_STRING convertedString;
+            PPH_STRING inputString;
             PH_STRING_BUILDER receivedString;
 
             if (wParam != 0)
             {
-                inputString.Buffer = (PCHAR)lParam;
-                inputString.Length = (USHORT)wParam;
+                inputString = (PPH_STRING)wParam;
+                PPH_STRING windowText = NULL;
 
-                if (NT_SUCCESS(RtlOemStringToUnicodeString(&convertedString, &inputString, TRUE)))
+                PhInitializeStringBuilder(&receivedString, PAGE_SIZE);
+
+                // Get the current output text.
+                windowText = PhGetWindowText(context->OutputHandle);
+
+                // Append the current output text to the New string.
+                if (!PhIsNullOrEmptyString(windowText))
+                    PhAppendStringBuilder(&receivedString, &windowText->sr);
+
+                PhAppendFormatStringBuilder(&receivedString, L"%s", inputString->Buffer);
+
+                // Remove leading newlines.
+                if (receivedString.String->Length >= 2 * 2 &&
+                    receivedString.String->Buffer[0] == '\r' &&
+                    receivedString.String->Buffer[1] == '\n')
                 {
-                    PPH_STRING windowText = NULL;
-
-                    PhInitializeStringBuilder(&receivedString, PAGE_SIZE);
-
-                    // Get the current output text.
-                    windowText = PhGetWindowText(context->OutputHandle);
-
-                    // Append the current output text to the New string.
-                    if (!PhIsNullOrEmptyString(windowText))
-                        PhAppendStringBuilder(&receivedString, &windowText->sr);
-
-                    PhAppendFormatStringBuilder(&receivedString, L"%s", convertedString.Buffer);
-
-                    // Remove leading newlines.
-                    if (receivedString.String->Length >= 2 * 2 &&
-                        receivedString.String->Buffer[0] == '\r' &&
-                        receivedString.String->Buffer[1] == '\n')
-                    {
-                        PhRemoveStringBuilder(&receivedString, 0, 2);
-                    }
-
-                    SetWindowText(context->OutputHandle, receivedString.String->Buffer);
-                    SendMessage(
-                        context->OutputHandle,
-                        EM_SETSEL,
-                        receivedString.String->Length / 2 - 1,
-                        receivedString.String->Length / 2 - 1
-                        );
-                    SendMessage(context->OutputHandle, WM_VSCROLL, SB_BOTTOM, 0);
-
-                    PhDereferenceObject(windowText);
-                    PhDeleteStringBuilder(&receivedString);
-                    RtlFreeUnicodeString(&convertedString);
+                    PhRemoveStringBuilder(&receivedString, 0, 2);
                 }
+
+                SetWindowText(context->OutputHandle, receivedString.String->Buffer);
+                SendMessage(
+                    context->OutputHandle,
+                    EM_SETSEL,
+                    receivedString.String->Length / 2 - 1,
+                    receivedString.String->Length / 2 - 1
+                );
+                SendMessage(context->OutputHandle, WM_VSCROLL, SB_BOTTOM, 0);
+
+                PhDereferenceObject(windowText);
+                PhDeleteStringBuilder(&receivedString);
+                //PhDereferenceObject(&inputString);
             }
         }
         break;
@@ -407,8 +401,7 @@ VOID PerformNetworkAction(
     memset(context, 0, sizeof(NETWORK_OUTPUT_CONTEXT));
 
     context->Action = Action;
-    context->NetworkItem = NetworkItem;
-    context->IpAddress = NetworkItem->RemoteEndpoint.Address;
+    context->RemoteEndpoint = NetworkItem->RemoteEndpoint;
 
     if (context->Action == NETWORK_ACTION_PING)
     {

@@ -27,6 +27,7 @@ PPH_PLUGIN PluginInstance;
 PH_CALLBACK_REGISTRATION PluginLoadCallbackRegistration;
 PH_CALLBACK_REGISTRATION PluginShowOptionsCallbackRegistration;
 PH_CALLBACK_REGISTRATION PluginMenuItemCallbackRegistration;
+PH_CALLBACK_REGISTRATION MainMenuInitializingCallbackRegistration;
 PH_CALLBACK_REGISTRATION NetworkMenuInitializingCallbackRegistration;
 
 VOID NTAPI ShowOptionsCallback(
@@ -43,23 +44,83 @@ VOID NTAPI MenuItemCallback(
     )
 {
     PPH_PLUGIN_MENU_ITEM menuItem = (PPH_PLUGIN_MENU_ITEM)Parameter;
-    PPH_NETWORK_ITEM networkItem = (PPH_NETWORK_ITEM)menuItem->Context;
 
-    switch (menuItem->Id)
+    if (menuItem->Id == MAINMENU_ACTION_TRACERT)
     {
-    case NETWORK_ACTION_PING:
-        PerformNetworkAction(NETWORK_ACTION_PING, networkItem);
-        break;
-    case NETWORK_ACTION_TRACEROUTE:
-        PerformNetworkAction(NETWORK_ACTION_TRACEROUTE, networkItem);
-        break;
-    case NETWORK_ACTION_WHOIS:
-        PerformNetworkAction(NETWORK_ACTION_WHOIS, networkItem);
-        break;
-    case NETWORK_ACTION_PATHPING:
-        PerformNetworkAction(NETWORK_ACTION_PATHPING, networkItem);
-        break;
+        BOOLEAN success = FALSE;
+        PH_IP_ENDPOINT RemoteEndpoint;
+        PPH_STRING selectedChoice = NULL;
+
+        while (PhaChoiceDialog(
+            menuItem->OwnerWindow,
+            L"Tracert",
+            L"IP address for trace:",
+            NULL,
+            0,
+            NULL,
+            PH_CHOICE_DIALOG_USER_CHOICE,
+            &selectedChoice,
+            NULL,
+            SETTING_NAME_TRACERT_MENU
+            ))
+        {
+            PWSTR terminator = NULL;
+
+            if (NT_SUCCESS(RtlIpv4StringToAddress(selectedChoice->Buffer, TRUE, &terminator, &RemoteEndpoint.Address.InAddr)))
+            {   
+                RemoteEndpoint.Address.Type = PH_IPV4_NETWORK_TYPE;
+                success = TRUE;
+                break;
+            }
+
+            if (NT_SUCCESS(RtlIpv6StringToAddress(selectedChoice->Buffer, &terminator, &RemoteEndpoint.Address.In6Addr)))
+            {
+                RemoteEndpoint.Address.Type = PH_IPV6_NETWORK_TYPE;
+                success = TRUE;
+                break;
+            }
+        }
+
+        if (success)
+        {
+            ShowTracertWindowFromAddress(RemoteEndpoint);
+        }
     }
+    else
+    {
+        PPH_NETWORK_ITEM networkItem = (PPH_NETWORK_ITEM)menuItem->Context;
+
+        switch (menuItem->Id)
+        {
+        case NETWORK_ACTION_PING:
+            PerformNetworkAction(NETWORK_ACTION_PING, networkItem);
+            break;
+        case NETWORK_ACTION_TRACEROUTE:
+            ShowTracertWindow(networkItem);
+            break;
+        case NETWORK_ACTION_WHOIS:
+            PerformNetworkAction(NETWORK_ACTION_WHOIS, networkItem);
+            break;
+        case NETWORK_ACTION_PATHPING:
+            PerformNetworkAction(NETWORK_ACTION_PATHPING, networkItem);
+            break;
+        }
+    }
+}
+
+VOID NTAPI MainMenuInitializingCallback(
+    _In_opt_ PVOID Parameter,
+    _In_opt_ PVOID Context
+    )
+{
+    PPH_PLUGIN_MENU_INFORMATION menuInfo = Parameter;
+
+    if (!menuInfo || menuInfo->u.MainMenu.SubMenuIndex != PH_MENU_ITEM_LOCATION_TOOLS)
+        return;
+
+    PhInsertEMenuItem(menuInfo->Menu, PhCreateEMenuItem(PH_EMENU_SEPARATOR, 0, NULL, NULL, NULL), -1);
+    PhInsertEMenuItem(menuInfo->Menu, PhPluginCreateEMenuItem(PluginInstance, 0, MAINMENU_ACTION_TRACERT, L"Ping IP address...", NULL), -1);
+    PhInsertEMenuItem(menuInfo->Menu, PhPluginCreateEMenuItem(PluginInstance, 0, MAINMENU_ACTION_TRACERT, L"Traceroute IP address...", NULL), -1);
 }
 
 VOID NTAPI NetworkMenuInitializingCallback(
@@ -117,7 +178,8 @@ LOGICAL DllMain(
                 { IntegerPairSettingType, SETTING_NAME_PING_WINDOW_POSITION, L"0,0" },
                 { ScalableIntegerPairSettingType, SETTING_NAME_PING_WINDOW_SIZE, L"@96|420,250" },
                 { IntegerSettingType, SETTING_NAME_PING_MINIMUM_SCALING, L"64" }, // 100ms minimum scaling
-                { IntegerSettingType, SETTING_NAME_PING_SIZE, L"20" } // 32 byte packet
+                { IntegerSettingType, SETTING_NAME_PING_SIZE, L"20" }, // 32 byte packet
+                { StringSettingType, SETTING_NAME_TRACERT_MENU, L"" }
             };
 
             PluginInstance = PhRegisterPlugin(PLUGIN_NAME, Instance, &info);
@@ -143,7 +205,12 @@ LOGICAL DllMain(
                 NULL,
                 &PluginMenuItemCallbackRegistration
                 );
-
+            PhRegisterCallback(
+                PhGetGeneralCallback(GeneralCallbackMainMenuInitializing),
+                MainMenuInitializingCallback,
+                NULL,
+                &MainMenuInitializingCallbackRegistration
+                );
             PhRegisterCallback(
                 PhGetGeneralCallback(GeneralCallbackNetworkMenuInitializing),
                 NetworkMenuInitializingCallback,

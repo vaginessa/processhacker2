@@ -2,7 +2,7 @@
  * Process Hacker Network Tools -
  *   Tracert dialog
  *
- * Copyright (C) 2013 dmex
+ * Copyright (C) 2015 dmex
  *
  * This file is part of Process Hacker.
  *
@@ -21,138 +21,797 @@
  */
 
 #include "nettools.h"
+#include <commonutil.h>
 
-NTSTATUS StdOutNetworkTracertThreadStart(
+#define TRACERT_HEADER1 L"Tracing route to %s [%s] over a maximum of %u hops:\r\n\r\n" 
+#define TRACERT_HEADER2 L"Tracing route to %s over a maximum of %u hops\r\n\r\n" 
+
+#define DEFAULT_MAXIMUM_HOPS        30 
+#define DEFAULT_SEND_SIZE           64 
+#define DEFAULT_RECEIVE_SIZE      ((sizeof(ICMP_ECHO_REPLY) + DEFAULT_SEND_SIZE + MAX_OPT_SIZE)) 
+
+#define DEFAULT_TIMEOUT 4000
+#define MIN_INTERVAL    1000
+
+
+#define MAX_PINGS  3
+#define IP_ADDRESS_COLUMN (MAX_PINGS + 1)
+#define HOSTNAME_COLUMN (MAX_PINGS + 2)
+
+
+PPH_STRING PhGetWinsockErrorMessage(
+    _In_ ULONG Result
+    )
+{
+    PPH_STRING message;
+    ULONG messageLength = 0;
+
+    if (GetIpErrorString(Result, NULL, &messageLength) == ERROR_INSUFFICIENT_BUFFER)
+    {
+        message = PhCreateStringEx(NULL, messageLength * sizeof(WCHAR));
+
+        if (GetIpErrorString(Result, message->Buffer, &messageLength) != NO_ERROR)
+        {
+            PhDereferenceObject(message);
+            message = PhGetWin32Message(Result);
+        }
+    }
+    else
+    {
+        message = PhGetWin32Message(Result);
+    }
+
+    return message;
+}
+
+
+static VOID TracertUpdateTime(
+    _In_ PNETWORK_OUTPUT_CONTEXT Context,
+    _In_ INT Index,
+    _In_ INT SubIndex,
+    _In_ ULONG RoundTripTime
+    ) 
+{ 
+    if (RoundTripTime)
+    { 
+        //SendOutputStringFormat(Context, PhFormatString(L"%4lu ms  ", Time)); 
+        PhSetListViewSubItem(Context->OutputHandle, Index, SubIndex, PhFormatString(L"%lu ms", RoundTripTime)->Buffer);
+    } 
+    else 
+    { 
+        //SendOutputStringFormat(Context, PhFormatString(L"  <1 ms  " )); 
+        PhSetListViewSubItem(Context->OutputHandle, Index, SubIndex, PhFormatString(L"<1 ms", RoundTripTime)->Buffer);
+    } 
+} 
+
+
+
+
+
+typedef struct _TRACERT_RESOLVE_WORKITEM
+{
+    HWND LvHandle;
+    INT LvItemIndex;
+    SOCKADDR_IN sockAddrIn;
+} TRACERT_RESOLVE_WORKITEM, *PTRACERT_RESOLVE_WORKITEM;
+
+
+static NTSTATUS TracertHostnameLookupCallback(
     _In_ PVOID Parameter
     )
 {
-    NTSTATUS status;
-    PNETWORK_OUTPUT_CONTEXT context = (PNETWORK_OUTPUT_CONTEXT)Parameter;
-    IO_STATUS_BLOCK isb;
-    UCHAR buffer[PAGE_SIZE];
+    PTRACERT_RESOLVE_WORKITEM workItem = Parameter;
+    WSADATA winsockStartup;
+    WCHAR hostname[NI_MAXHOST] = L"";
 
-    while (TRUE)
+    if (WSAStartup(WINSOCK_VERSION, &winsockStartup) != ERROR_SUCCESS)
+        return STATUS_UNEXPECTED_NETWORK_ERROR;
+
+    if (!GetNameInfo(
+        (PSOCKADDR)&workItem->sockAddrIn, 
+        sizeof(SOCKADDR_IN), 
+        hostname, 
+        ARRAYSIZE(hostname), 
+        NULL, 
+        0,
+        NI_NAMEREQD
+        ))
     {
-        status = NtReadFile(
-            context->PipeReadHandle,
-            NULL,
-            NULL,
-            NULL,
-            &isb,
-            buffer,
-            sizeof(buffer),
-            NULL,
-            NULL
-            );
+        PhSetListViewSubItem(workItem->LvHandle, workItem->LvItemIndex, HOSTNAME_COLUMN, hostname);
+    }
+    else
+    {
+        ULONG errorCode = WSAGetLastError();
 
-        if (!NT_SUCCESS(status))
-            break;
-
-        SendMessage(context->WindowHandle, NTM_RECEIVEDTRACE, (WPARAM)isb.Information, (LPARAM)buffer);
+        if (errorCode != WSAHOST_NOT_FOUND)
+        {
+            PPH_STRING errorMessage = PhGetWin32Message(errorCode);
+            PhSetListViewSubItem(workItem->LvHandle, workItem->LvItemIndex, HOSTNAME_COLUMN, errorMessage->Buffer);
+            PhDereferenceObject(errorMessage);
+        }
+        else
+        {
+            PhSetListViewSubItem(workItem->LvHandle, workItem->LvItemIndex, HOSTNAME_COLUMN, L"");
+        }
     }
 
-    SendMessage(context->WindowHandle, NTM_RECEIVEDFINISH, 0, 0);
+    WSACleanup();
+
+    PhFree(workItem);
 
     return STATUS_SUCCESS;
 }
+
+static void QueueTracertItem(
+    _In_ PNETWORK_OUTPUT_CONTEXT Context,
+    _In_ INT LvItemIndex,
+    _In_ IPAddr ipv4Addr
+    )
+{
+    PTRACERT_RESOLVE_WORKITEM workItem;
+    
+    workItem = PhAllocate(sizeof(TRACERT_RESOLVE_WORKITEM));
+    memset(workItem, 0, sizeof(TRACERT_RESOLVE_WORKITEM));
+
+    workItem->LvHandle = Context->OutputHandle;
+    workItem->LvItemIndex = LvItemIndex;
+    workItem->sockAddrIn.sin_family = AF_INET;
+    workItem->sockAddrIn.sin_addr.s_addr = ipv4Addr;
+
+    PhQueueItemWorkQueue(PhGetGlobalWorkQueue(), TracertHostnameLookupCallback, workItem);
+}
+
+
+static VOID TracertShowIpv4Address(
+    _In_ PNETWORK_OUTPUT_CONTEXT Context,
+    _In_ INT LvItemIndex,
+    _In_ IPAddr ipv4Addr
+    ) 
+{ 
+    IN_ADDR sockAddrIn;
+    WCHAR addressString[INET6_ADDRSTRLEN + 1];
+
+    memset(&sockAddrIn, 0, sizeof(IN_ADDR));
+    memcpy(&sockAddrIn.s_addr, &ipv4Addr, sizeof(IPAddr));
+
+    RtlIpv4AddressToString(&sockAddrIn, addressString);
+
+    PhSetListViewSubItem(Context->OutputHandle, LvItemIndex, IP_ADDRESS_COLUMN, addressString);
+    PhSetListViewSubItem(Context->OutputHandle, LvItemIndex, HOSTNAME_COLUMN, L"Resolving address...");
+
+    QueueTracertItem(Context, LvItemIndex, ipv4Addr);
+}
+
+static VOID TracertShowIpv6Address(
+    _In_ PNETWORK_OUTPUT_CONTEXT Context,
+    _In_ INT LvItemIndex,
+    _In_ PIN6_ADDR ipv6Addr
+    ) 
+{ 
+    IN6_ADDR sockAddrIn6;
+    WCHAR addressString[INET6_ADDRSTRLEN + 1];
+
+    memset(&sockAddrIn6, 0, sizeof(IN6_ADDR));
+    memcpy(&sockAddrIn6, ipv6Addr, sizeof(IN6_ADDR));
+
+    RtlIpv6AddressToString(ipv6Addr, addressString);
+
+    PhSetListViewSubItem(Context->OutputHandle, LvItemIndex, IP_ADDRESS_COLUMN, addressString);
+    PhSetListViewSubItem(Context->OutputHandle, LvItemIndex, HOSTNAME_COLUMN, L"Resolving address...");
+}
+
+
+
+VOID TracertConvertEndpointToStorage(
+    _In_ PNETWORK_OUTPUT_CONTEXT Context,
+    _Out_ PSOCKADDR_STORAGE SockAddrStorage
+    )
+{
+    if (Context->RemoteEndpoint.Address.Type == PH_IPV4_NETWORK_TYPE)
+    {
+        ((PSOCKADDR_IN)SockAddrStorage)->sin_family = AF_INET;
+        ((PSOCKADDR_IN)SockAddrStorage)->sin_addr = Context->RemoteEndpoint.Address.InAddr;
+        ((PSOCKADDR_IN)SockAddrStorage)->sin_port = (USHORT)Context->RemoteEndpoint.Port;//_byteswap_ushort((USHORT)Context->RemoteEndpoint.Port);
+    }
+    else if (Context->RemoteEndpoint.Address.Type == PH_IPV6_NETWORK_TYPE)
+    {
+        ((PSOCKADDR_IN6)SockAddrStorage)->sin6_family = AF_INET6;
+        ((PSOCKADDR_IN6)SockAddrStorage)->sin6_addr = Context->RemoteEndpoint.Address.In6Addr;
+        ((PSOCKADDR_IN6)SockAddrStorage)->sin6_port = (USHORT)Context->RemoteEndpoint.Port;//_byteswap_ushort((USHORT)Context->RemoteEndpoint.Port);
+    }
+}
+
+
+
+static BOOLEAN RunTraceRoute(
+    _In_ PNETWORK_OUTPUT_CONTEXT Context
+    )
+{
+    HANDLE IcmpHandle = INVALID_HANDLE_VALUE;
+    SOCKADDR_STORAGE sourceAddress = { 0 };
+    SOCKADDR_STORAGE destinationAddress = { 0 };
+
+    //BYTE SendBuffer[DEFAULT_SEND_SIZE] = "";
+    //BYTE RcvBuffer[DEFAULT_RECEIVE_SIZE] = "";
+
+    ULONG icmpReplyLength = 0;
+    PVOID icmpReplyBuffer = NULL;
+    PPH_BYTES icmpEchoBuffer = NULL;
+    IP_OPTION_INFORMATION pingOptions =
+    {
+        1,           // Time To Live
+        0,           // Type Of Service
+        IP_FLAG_DF,  // IP header flags
+        0            // Size of options data
+    };
+
+
+    // A source address was not specified but this means each and every request selects its own source interface.
+    // We can also requrire a specific source address for this destination. 
+    //SOCKET socketHandle = INVALID_SOCKET;
+    //socketHandle = socket(destinationAddress.ss_family, 0, IPPROTO_HOPOPTS);
+    //if (socketHandle != INVALID_SOCKET)
+    //{
+    //    ULONG returnLength = 0;
+    //    WSAIoctl(
+    //        socketHandle,
+    //        SIO_ROUTING_INTERFACE_QUERY,
+    //        &destinationAddress,
+    //        sizeof(destinationAddress),
+    //        &sourceAddress,
+    //        sizeof(sourceAddress),
+    //        &returnLength,
+    //        NULL,
+    //        NULL
+    //        );
+    //    if (Context->RemoteEndpoint.Address.Type == PH_IPV4_NETWORK_TYPE)
+    //    {
+    //        if (returnLength != sizeof(SOCKADDR_IN))
+    //        {
+    //        }
+    //    }
+    //    else if (Context->RemoteEndpoint.Address.Type == PH_IPV6_NETWORK_TYPE)
+    //    {
+    //        if (returnLength != sizeof(SOCKADDR_IN6))
+    //        {
+    //        }
+    //    }
+    //    closesocket(socketHandle);
+    //}
+
+    TracertConvertEndpointToStorage(Context, &destinationAddress);
+    
+    switch (Context->RemoteEndpoint.Address.Type)
+    {
+    case PH_IPV4_NETWORK_TYPE:
+        IcmpHandle = IcmpCreateFile();
+        break;
+    case PH_IPV6_NETWORK_TYPE:
+        IcmpHandle = Icmp6CreateFile();
+        break;
+    }
+
+    if (IcmpHandle == INVALID_HANDLE_VALUE)
+    {
+
+    }
+
+    if (Context->PingSize > 0 && Context->PingSize != 32)
+    {
+        PPH_STRING randString;
+
+        randString = PhCreateStringEx(NULL, Context->PingSize * 2 + 2);
+
+        // Create a random string to fill the buffer.
+        PhGenerateRandomAlphaString(randString->Buffer, (ULONG)randString->Length / sizeof(WCHAR));
+
+        icmpEchoBuffer = PhConvertUtf16ToMultiByte(randString->Buffer);
+        PhDereferenceObject(randString);
+    }
+    else
+    {
+        PPH_STRING version;
+
+        // We're using a default length, query the PH version and use the previous buffer format.
+        version = PhGetPhVersion();
+
+        if (version)
+        {
+            icmpEchoBuffer = FormatAnsiString("processhacker_%S_0x0D06F00D_x1", version->Buffer);
+            PhDereferenceObject(version);
+        }
+    }
+
+
+
+    for (UINT i = 0; i < DEFAULT_MAXIMUM_HOPS; i++)
+    {
+        BOOLEAN haveReply = FALSE;
+        IPAddr reply4Address = in4addr_any.s_addr;
+        IN6_ADDR reply6Address = in6addr_any;
+        INT lvItemIndex;
+        
+        if (!Context->OutputHandle)
+            break;
+        
+        lvItemIndex = PhAddListViewItem(
+            Context->OutputHandle, 
+            MAXINT, 
+            PhaFormatString(L"%u", (UINT)pingOptions.Ttl)->Buffer,
+            NULL
+            );
+
+        for (UINT i = 0; i < MAX_PINGS; i++)
+        {
+            if (!Context->OutputHandle)
+                break;
+
+            if (Context->RemoteEndpoint.Address.Type == PH_IPV4_NETWORK_TYPE)
+            {
+                // Allocate ICMPv6 message.
+                icmpReplyLength = ICMP_BUFFER_SIZE(sizeof(ICMP_ECHO_REPLY), icmpEchoBuffer);
+                icmpReplyBuffer = PhAllocate(icmpReplyLength);
+                memset(icmpReplyBuffer, 0, icmpReplyLength);
+
+                if (!IcmpSendEcho2Ex(
+                    IcmpHandle,
+                    0,
+                    NULL,
+                    NULL,
+                    ((PSOCKADDR_IN)&sourceAddress)->sin_addr.s_addr,
+                    ((PSOCKADDR_IN)&destinationAddress)->sin_addr.s_addr,
+                    icmpEchoBuffer->Buffer,
+                    (USHORT)icmpEchoBuffer->Length,
+                    &pingOptions,
+                    icmpReplyBuffer,
+                    icmpReplyLength,
+                    DEFAULT_TIMEOUT
+                    ))
+                { 
+                    // We did not get any replies due to a timeout or error. 
+                    if (GetLastError() == IP_REQ_TIMED_OUT)
+                    { 
+                        PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, i + 1, L"*");
+
+                        if (i == (MAX_PINGS - 1))
+                        {
+                            if (haveReply)
+                            {
+                                TracertShowIpv4Address(Context, lvItemIndex, reply4Address);
+                            }
+                            else
+                            {
+                                PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, PhGetWinsockErrorMessage(GetLastError())->Buffer);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, PhGetWinsockErrorMessage(GetLastError())->Buffer);
+                    }
+                }
+                else
+                {
+                    // We got a reply. It's either the final destination address, the TTL expired or an unexpected error response.
+                    PICMP_ECHO_REPLY reply4 = (PICMP_ECHO_REPLY)icmpReplyBuffer;
+
+                    if (reply4->Status == IP_SUCCESS) 
+                    { 
+                        TracertUpdateTime(Context, lvItemIndex, i + 1, reply4->RoundTripTime);
+         
+                        if (i == (MAX_PINGS - 1))
+                        {
+                            TracertShowIpv4Address(Context, lvItemIndex, reply4->Address);
+                            goto loop_end;
+                        }
+                        else
+                        {
+                            haveReply = TRUE;
+                            reply4Address = reply4->Address;
+                        }
+                    }
+                    else if (reply4->Status == IP_TTL_EXPIRED_TRANSIT)
+                    {
+                        TracertUpdateTime(Context, lvItemIndex, i + 1, reply4->RoundTripTime);
+     
+                        if (i == (MAX_PINGS - 1))
+                        {
+                            TracertShowIpv4Address(Context, lvItemIndex, reply4->Address);
+
+                            if (reply4->RoundTripTime < MIN_INTERVAL)
+                            {
+                                Sleep(MIN_INTERVAL - reply4->RoundTripTime);
+                            }
+                        }
+                        else
+                        {
+                            haveReply = TRUE;
+                            reply4Address = reply4->Address;
+                        }
+                    }
+                    else
+                    {
+                        PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, PhGetWinsockErrorMessage(GetLastError())->Buffer);
+                    }
+                }
+            }
+            else 
+            {
+                icmpReplyLength = ICMP_BUFFER_SIZE(sizeof(ICMPV6_ECHO_REPLY), icmpEchoBuffer);
+                icmpReplyBuffer = PhAllocate(icmpReplyLength);
+                memset(icmpReplyBuffer, 0, icmpReplyLength);
+
+                if (!Icmp6SendEcho2( 
+                    IcmpHandle,
+                    0,
+                    NULL,
+                    NULL,
+                    ((PSOCKADDR_IN6)&sourceAddress),
+                    ((PSOCKADDR_IN6)&destinationAddress),
+                    icmpEchoBuffer->Buffer,
+                    (USHORT)icmpEchoBuffer->Length,
+                    &pingOptions,
+                    icmpReplyBuffer,
+                    icmpReplyLength,
+                    DEFAULT_TIMEOUT
+                    ))
+                {
+                    if (GetLastError() == IP_REQ_TIMED_OUT)
+                    {
+                        PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, i + 1, L"*");
+
+                        if (i == (MAX_PINGS - 1))
+                        {
+                            if (haveReply)
+                            {
+                                TracertShowIpv6Address(Context, lvItemIndex, &reply6Address);
+                            }
+                            else
+                            {
+                                PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, PhGetWinsockErrorMessage(GetLastError())->Buffer);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, PhGetWinsockErrorMessage(GetLastError())->Buffer);
+                    }
+                }
+                else
+                { 
+                    PICMPV6_ECHO_REPLY reply6 = (PICMPV6_ECHO_REPLY)icmpReplyBuffer;
+
+                    if (reply6->Status == IP_SUCCESS) 
+                    {
+                        TracertUpdateTime(Context, lvItemIndex, i + 1, reply6->RoundTripTime);
+
+                        if (i == (MAX_PINGS - 1))
+                        { 
+                            TracertShowIpv6Address(Context, lvItemIndex, (PIN6_ADDR)&reply6->Address.sin6_addr);
+                            goto loop_end; 
+                        } 
+                        else 
+                        { 
+                            haveReply = TRUE;
+                            memcpy(&reply6Address, &reply6->Address.sin6_addr, sizeof(IN6_ADDR)); 
+                        } 
+                    } 
+                    else if (reply6->Status == IP_HOP_LIMIT_EXCEEDED) 
+                    {
+                        TracertUpdateTime(Context, lvItemIndex, i + 1, reply6->RoundTripTime);
+
+                        if (i == (MAX_PINGS - 1))
+                        { 
+                            TracertShowIpv6Address(Context, lvItemIndex, (PIN6_ADDR)&reply6->Address.sin6_addr);
+     
+                            if (reply6->RoundTripTime < MIN_INTERVAL)
+                            { 
+                                Sleep(MIN_INTERVAL - reply6->RoundTripTime); 
+                            }
+                        } 
+                        else 
+                        { 
+                            haveReply = TRUE; 
+                            memcpy(&reply6Address, &reply6->Address.sin6_addr, sizeof(IN6_ADDR)); 
+                        } 
+                    } 
+                    else 
+                    { 
+                        PhSetListViewSubItem(Context->OutputHandle, lvItemIndex, IP_ADDRESS_COLUMN, PhGetWinsockErrorMessage(GetLastError())->Buffer);
+                    } 
+                }
+            }
+        }
+ 
+        pingOptions.Ttl++;
+    } 
+ 
+
+loop_end:
+    //SendOutputStringFormat(Context, PhFormatString(L"\r\nTrace complete.\r\n")); 
+    IcmpCloseHandle(IcmpHandle); 
+
+    PostMessage(Context->WindowHandle, NTM_RECEIVEDFINISH, 0, 0);
+
+    return TRUE; 
+}
+
+
+
 
 NTSTATUS NetworkTracertThreadStart(
     _In_ PVOID Parameter
     )
 {
-    HANDLE pipeWriteHandle = INVALID_HANDLE_VALUE;
-    PNETWORK_OUTPUT_CONTEXT context = (PNETWORK_OUTPUT_CONTEXT)Parameter;
+    PNETWORK_OUTPUT_CONTEXT context;
+    PH_AUTO_POOL autoPool;
 
-    if (CreatePipe(&context->PipeReadHandle, &pipeWriteHandle, NULL, 0))
-    {
-        HANDLE threadHandle = NULL;
-        STARTUPINFO startupInfo = { sizeof(startupInfo) };
-        OBJECT_HANDLE_FLAG_INFORMATION flagInfo;
-        PPH_STRING command = NULL;
+    context = (PNETWORK_OUTPUT_CONTEXT)Parameter;
 
-        startupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-        startupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-        startupInfo.hStdOutput = pipeWriteHandle;
-        startupInfo.hStdError = pipeWriteHandle;
-        startupInfo.wShowWindow = SW_HIDE;
+    PhInitializeAutoPool(&autoPool);
 
-        switch (context->Action)
-        {
-        case NETWORK_ACTION_TRACEROUTE:
-            {
-                if (PhGetIntegerSetting(L"EnableNetworkResolve"))
-                {
-                    command = PhFormatString(
-                        L"%s\\system32\\tracert.exe %s",
-                        USER_SHARED_DATA->NtSystemRoot,
-                        context->IpAddressString
-                        );
-                }
-                else
-                {
-                    // Disable hostname lookup.
-                    command = PhFormatString(
-                        L"%s\\system32\\tracert.exe -d %s",
-                        USER_SHARED_DATA->NtSystemRoot,
-                        context->IpAddressString
-                        );
-                }
-            }
-            break;
-        case NETWORK_ACTION_PATHPING:
-            {
-                if (PhGetIntegerSetting(L"EnableNetworkResolve"))
-                {
-                    command = PhFormatString(
-                        L"%s\\system32\\pathping.exe %s",
-                        USER_SHARED_DATA->NtSystemRoot,
-                        context->IpAddressString
-                        );
-                }
-                else
-                {
-                    // Disable hostname lookup.
-                    command = PhFormatString(
-                        L"%s\\system32\\pathping.exe -n %s",
-                        USER_SHARED_DATA->NtSystemRoot,
-                        context->IpAddressString
-                        );
-                }
-            }
-            break;
-        }
 
-        // Allow the write handle to be inherited.
-        flagInfo.Inherit = TRUE;
-        flagInfo.ProtectFromClose = FALSE;
+    RunTraceRoute(context);
 
-        NtSetInformationObject(
-            pipeWriteHandle,
-            ObjectHandleFlagInformation,
-            &flagInfo,
-            sizeof(OBJECT_HANDLE_FLAG_INFORMATION)
-            );
+    
 
-        PhCreateProcessWin32Ex(
-            NULL,
-            command->Buffer,
-            NULL,
-            NULL,
-            &startupInfo,
-            PH_CREATE_PROCESS_INHERIT_HANDLES,
-            NULL,
-            NULL,
-            &context->ProcessHandle,
-            NULL
-            );
-
-        // Essential; when the process exits, the last instance of the pipe will be disconnected and our thread will exit.
-        NtClose(pipeWriteHandle);
-
-        // Create a thread which will wait for output and display it.
-        if (threadHandle = PhCreateThread(0, StdOutNetworkTracertThreadStart, context))
-            NtClose(threadHandle);
-    }
+    PhDrainAutoPool(&autoPool);
+    PhDeleteAutoPool(&autoPool);
 
     return STATUS_SUCCESS;
+}
+
+
+
+
+INT_PTR CALLBACK TracertDlgProc(
+    _In_ HWND hwndDlg,
+    _In_ UINT uMsg,
+    _In_ WPARAM wParam,
+    _In_ LPARAM lParam
+    )
+{
+    PNETWORK_OUTPUT_CONTEXT context;
+
+    if (uMsg == WM_INITDIALOG)
+    {
+        context = (PNETWORK_OUTPUT_CONTEXT)lParam;
+        SetProp(hwndDlg, L"Context", (HANDLE)context);
+    }
+    else
+    {
+        context = (PNETWORK_OUTPUT_CONTEXT)GetProp(hwndDlg, L"Context");
+
+        if (uMsg == WM_DESTROY)
+        {
+            PhSaveWindowPlacementToSetting(SETTING_NAME_TRACERT_WINDOW_POSITION, SETTING_NAME_TRACERT_WINDOW_SIZE, hwndDlg);
+            PhDeleteLayoutManager(&context->LayoutManager);
+
+            context->OutputHandle = NULL;
+
+            PhSaveWindowPlacementToSetting(
+                SETTING_NAME_PING_WINDOW_POSITION,
+                SETTING_NAME_PING_WINDOW_SIZE,
+                hwndDlg
+                );
+
+            if (context->IconHandle)
+                DestroyIcon(context->IconHandle);
+
+            if (context->FontHandle)
+                DeleteObject(context->FontHandle);
+
+            RemoveProp(hwndDlg, L"Context");
+            PhFree(context);
+
+            PostQuitMessage(0);
+        }
+    }
+
+    if (!context)
+        return FALSE;
+
+    switch (uMsg)
+    {
+    case WM_INITDIALOG:
+        {
+            PH_RECTANGLE windowRectangle;
+
+            context->WindowHandle = hwndDlg;
+            context->OutputHandle = GetDlgItem(hwndDlg, IDC_NETOUTPUTEDIT);
+            context->MaxPingTimeout = PhGetIntegerSetting(SETTING_NAME_PING_MINIMUM_SCALING);
+            context->PingSize = PhGetIntegerSetting(SETTING_NAME_PING_SIZE);
+
+            windowRectangle.Position = PhGetIntegerPairSetting(SETTING_NAME_TRACERT_WINDOW_POSITION);
+            windowRectangle.Size = PhGetScalableIntegerPairSetting(SETTING_NAME_TRACERT_WINDOW_SIZE, TRUE).Pair;
+
+            // Create the font handle.
+            context->FontHandle = CommonCreateFont(-15, GetDlgItem(hwndDlg, IDC_STATUS));
+
+            // Load the Process Hacker icon.
+            context->IconHandle = (HICON)LoadImage(
+                NtCurrentPeb()->ImageBaseAddress,
+                MAKEINTRESOURCE(PHAPP_IDI_PROCESSHACKER),
+                IMAGE_ICON,
+                GetSystemMetrics(SM_CXICON),
+                GetSystemMetrics(SM_CYICON),
+                LR_SHARED
+                );
+
+            // Set window icon.
+            if (context->IconHandle)
+                SendMessage(hwndDlg, WM_SETICON, ICON_SMALL, (LPARAM)context->IconHandle);
+
+            //PhInitializeWorkQueue(&context->PingWorkQueue, 0, 20, 5000);
+
+            PhSetListViewStyle(context->OutputHandle, FALSE, TRUE);
+            PhSetControlTheme(context->OutputHandle, L"explorer");
+            PhAddListViewColumn(context->OutputHandle, 0, 0, 0, LVCFMT_RIGHT, 30, L"TTL");
+            for (UINT i = 0; i < MAX_PINGS; i++)
+                PhAddListViewColumn(context->OutputHandle, i + 1, i + 1, i + 1, LVCFMT_RIGHT, 50, L"Time");
+            PhAddListViewColumn(context->OutputHandle, IP_ADDRESS_COLUMN, IP_ADDRESS_COLUMN, IP_ADDRESS_COLUMN, LVCFMT_LEFT, 120, L"Ip Address");
+            PhAddListViewColumn(context->OutputHandle, HOSTNAME_COLUMN, HOSTNAME_COLUMN, HOSTNAME_COLUMN, LVCFMT_LEFT, 240, L"Hostname");
+            PhSetExtendedListView(context->OutputHandle);
+
+            PhInitializeLayoutManager(&context->LayoutManager, hwndDlg);
+            PhAddLayoutItem(&context->LayoutManager, context->OutputHandle, NULL, PH_ANCHOR_ALL);
+            PhAddLayoutItem(&context->LayoutManager, GetDlgItem(hwndDlg, IDC_STATUS), NULL, PH_ANCHOR_TOP | PH_ANCHOR_LEFT | PH_ANCHOR_RIGHT);
+            PhAddLayoutItem(&context->LayoutManager, GetDlgItem(hwndDlg, IDC_ICMP_PANEL), NULL, PH_ANCHOR_BOTTOM | PH_ANCHOR_LEFT);
+            PhAddLayoutItem(&context->LayoutManager, GetDlgItem(hwndDlg, IDC_PINGS_SENT), NULL, PH_ANCHOR_BOTTOM | PH_ANCHOR_LEFT);
+            PhAddLayoutItem(&context->LayoutManager, GetDlgItem(hwndDlg, IDC_PINGS_LOST), NULL, PH_ANCHOR_BOTTOM | PH_ANCHOR_LEFT);
+            PhAddLayoutItem(&context->LayoutManager, GetDlgItem(hwndDlg, IDC_BAD_HASH), NULL, PH_ANCHOR_BOTTOM | PH_ANCHOR_LEFT);
+            PhAddLayoutItem(&context->LayoutManager, GetDlgItem(hwndDlg, IDCANCEL), NULL, PH_ANCHOR_BOTTOM | PH_ANCHOR_RIGHT);            
+
+            // Load window settings.
+            if (windowRectangle.Position.X == 0 || windowRectangle.Position.Y == 0)
+                PhCenterWindow(hwndDlg, GetParent(hwndDlg));
+            else
+            {
+                PhLoadWindowPlacementFromSetting(SETTING_NAME_PING_WINDOW_POSITION, SETTING_NAME_PING_WINDOW_SIZE, hwndDlg);
+            }
+
+            if (context->RemoteEndpoint.Address.Type == PH_IPV4_NETWORK_TYPE)
+            {
+                RtlIpv4AddressToString(&context->RemoteEndpoint.Address.InAddr, context->IpAddressString);
+            }
+            else
+            {
+                RtlIpv6AddressToString(&context->RemoteEndpoint.Address.In6Addr, context->IpAddressString);
+            }
+
+            HANDLE dialogThread = INVALID_HANDLE_VALUE;
+
+            Static_SetText(context->WindowHandle,
+                PhaFormatString(L"Tracing route to %s...", context->IpAddressString)->Buffer
+                );
+            Static_SetText(GetDlgItem(hwndDlg, IDC_STATUS),
+                PhaFormatString(L"Tracing route to %s...", context->IpAddressString)->Buffer
+                );
+
+            if (dialogThread = PhCreateThread(0, NetworkTracertThreadStart, (PVOID)context))
+            {
+                NtClose(dialogThread);
+            }
+        }
+        break;
+    case WM_COMMAND:
+        {
+            switch (GET_WM_COMMAND_ID(wParam, lParam))
+            {
+            case IDCANCEL:
+            case IDOK:
+                DestroyWindow(hwndDlg);
+                break;
+            }
+        }
+        break;
+    case WM_SIZE:
+        PhLayoutManagerLayout(&context->LayoutManager);
+        break;
+    case NTM_RECEIVEDFINISH:
+        {
+            PPH_STRING windowText = PhGetWindowText(context->WindowHandle);
+
+            if (windowText)
+            {
+                Static_SetText(
+                    context->WindowHandle,
+                    PhaFormatString(L"%s Finished.", windowText->Buffer)->Buffer
+                    );
+                PhDereferenceObject(windowText);
+            }
+
+            windowText = PhGetWindowText(GetDlgItem(hwndDlg, IDC_STATUS));
+
+            if (windowText)
+            {
+                Static_SetText(
+                    GetDlgItem(hwndDlg, IDC_STATUS),
+                    PhaFormatString(L"%s Finished.", windowText->Buffer)->Buffer
+                    );
+                PhDereferenceObject(windowText);
+            }
+        }
+        break;
+    }
+
+    return FALSE;
+}
+
+NTSTATUS TracertDialogThreadStart(
+    _In_ PVOID Parameter
+    )
+{
+    BOOL result;
+    MSG message;
+    HWND windowHandle;
+    PH_AUTO_POOL autoPool;
+    PNETWORK_OUTPUT_CONTEXT context = (PNETWORK_OUTPUT_CONTEXT)Parameter;
+
+    PhInitializeAutoPool(&autoPool);
+
+    windowHandle = CreateDialogParam(
+        (HINSTANCE)PluginInstance->DllBase,
+        MAKEINTRESOURCE(IDD_TRACERT),
+        PhMainWndHandle,
+        TracertDlgProc,
+        (LPARAM)Parameter
+        );
+
+    ShowWindow(windowHandle, SW_SHOW);
+    SetForegroundWindow(windowHandle);
+
+    while (result = GetMessage(&message, NULL, 0, 0))
+    {
+        if (result == -1)
+            break;
+
+        if (!IsDialogMessage(context->WindowHandle, &message))
+        {
+            TranslateMessage(&message);
+            DispatchMessage(&message);
+        }
+
+        PhDrainAutoPool(&autoPool);
+    }
+
+    PhDeleteAutoPool(&autoPool);
+
+    return STATUS_SUCCESS;
+}
+
+VOID ShowTracertWindow(
+    _In_ PPH_NETWORK_ITEM NetworkItem
+    )
+{
+    HANDLE dialogThread = INVALID_HANDLE_VALUE;
+    PNETWORK_OUTPUT_CONTEXT context;
+
+    context = (PNETWORK_OUTPUT_CONTEXT)PhAllocate(sizeof(NETWORK_OUTPUT_CONTEXT));
+    memset(context, 0, sizeof(NETWORK_OUTPUT_CONTEXT));
+
+    context->RemoteEndpoint = NetworkItem->RemoteEndpoint;
+
+    if (dialogThread = PhCreateThread(0, TracertDialogThreadStart, (PVOID)context))
+    {
+        NtClose(dialogThread);
+    }
+}
+
+VOID ShowTracertWindowFromAddress(
+    _In_ PH_IP_ENDPOINT RemoteEndpoint
+    )
+{
+    HANDLE dialogThread = INVALID_HANDLE_VALUE;
+    PNETWORK_OUTPUT_CONTEXT context;
+
+    context = (PNETWORK_OUTPUT_CONTEXT)PhAllocate(sizeof(NETWORK_OUTPUT_CONTEXT));
+    memset(context, 0, sizeof(NETWORK_OUTPUT_CONTEXT));
+
+    context->RemoteEndpoint = RemoteEndpoint;
+
+    if (dialogThread = PhCreateThread(0, TracertDialogThreadStart, (PVOID)context))
+    {
+        NtClose(dialogThread);
+    }
 }

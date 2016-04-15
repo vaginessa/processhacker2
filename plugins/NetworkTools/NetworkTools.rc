@@ -122,12 +122,26 @@ BEGIN
     GROUPBOX        "Ping statistics",IDC_ICMP_PANEL,7,56,254,52,0,WS_EX_TRANSPARENT
     LTEXT           "Average: 0ms",IDC_ICMP_AVG,13,69,73,8
     LTEXT           "Pings sent: 0",IDC_PINGS_SENT,92,69,88,8
-    LTEXT           "Bad hashes: 0",IDC_BAD_HASH,186,69,72,8
+    LTEXT           "Bad replies: 0",IDC_BAD_HASH,186,69,72,8
     LTEXT           "Minimum: 0ms",IDC_ICMP_MIN,13,81,73,8
     LTEXT           "Pings lost: 0 (0%)",IDC_PINGS_LOST,92,81,88,8
     LTEXT           "Anon replies: 0",IDC_ANON_ADDR,186,81,72,8
     LTEXT           "Maximum: 0ms",IDC_ICMP_MAX,13,93,73,8
     DEFPUSHBUTTON   "Close",IDOK,212,110,50,14
+END
+
+IDD_TRACERT DIALOGEX 0, 0, 389, 212
+STYLE DS_SETFONT | DS_FIXEDSYS | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME
+CAPTION "Dialog"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    PUSHBUTTON      "Cancel",IDCANCEL,332,191,50,14
+    CONTROL         "",IDC_NETOUTPUTEDIT,"SysListView32",LVS_REPORT | LVS_ALIGNLEFT | WS_BORDER | WS_TABSTOP,7,23,375,142
+    LTEXT           "Tracing route to xyz...",IDC_STATUS,7,5,375,12
+    LTEXT           "Packets sent: 0",IDC_PINGS_SENT,13,179,88,8
+    LTEXT           "Bad replies: 0",IDC_BAD_HASH,111,179,72,8
+    LTEXT           "Packets lost: 0 (0%)",IDC_PINGS_LOST,13,192,88,8
+    GROUPBOX        "Tracert statistics",IDC_ICMP_PANEL,7,168,254,37,0,WS_EX_TRANSPARENT
 END
 
 
@@ -162,6 +176,14 @@ BEGIN
         TOPMARGIN, 7
         BOTTOMMARGIN, 124
     END
+
+    IDD_TRACERT, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 382
+        TOPMARGIN, 7
+        BOTTOMMARGIN, 205
+    END
 END
 #endif    // APSTUDIO_INVOKED
 
@@ -177,6 +199,16 @@ BEGIN
 END
 
 IDD_OPTIONS AFX_DIALOG_LAYOUT
+BEGIN
+    0
+END
+
+IDD_TRACERT AFX_DIALOG_LAYOUT
+BEGIN
+    0
+END
+
+IDD_PINGDIALOG AFX_DIALOG_LAYOUT
 BEGIN
     0
 END

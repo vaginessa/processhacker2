@@ -40,52 +40,9 @@ VOID NetworkPingUpdateGraph(
     InvalidateRect(Context->PingGraphHandle, NULL, FALSE);
 }
 
-/**
- * Creates a Ansi string using format specifiers.
- *
- * \param Format The format-control string.
- * \param ArgPtr A pointer to the list of arguments.
- */
-PPH_BYTES FormatAnsiString_V(
-    _In_ _Printf_format_string_ PSTR Format,
-    _In_ va_list ArgPtr
-    )
-{
-    PPH_BYTES string;
-    int length;
 
-    length = _vscprintf(Format, ArgPtr);
 
-    if (length == -1)
-        return NULL;
 
-    string = PhCreateBytesEx(NULL, length * sizeof(CHAR));
-
-    _vsnprintf(
-        string->Buffer,
-        length,
-        Format, ArgPtr
-        );
-
-    return string;
-}
-
-/**
- * Creates a Ansi string using format specifiers.
- *
- * \param Format The format-control string.
- */
-PPH_BYTES FormatAnsiString(
-    _In_ _Printf_format_string_ PSTR Format,
-    ...
-    )
-{
-    va_list argptr;
-
-    va_start(argptr, Format);
-
-    return FormatAnsiString_V(Format, argptr);
-}
 
 NTSTATUS NetworkPingThreadStart(
     _In_ PVOID Parameter
@@ -136,7 +93,7 @@ NTSTATUS NetworkPingThreadStart(
             }
         }
 
-        if (context->IpAddress.Type == PH_IPV6_NETWORK_TYPE)
+        if (context->RemoteEndpoint.Address.Type == PH_IPV6_NETWORK_TYPE)
         {
             SOCKADDR_IN6 icmp6LocalAddr = { 0 };
             SOCKADDR_IN6 icmp6RemoteAddr = { 0 };
@@ -151,8 +108,8 @@ NTSTATUS NetworkPingThreadStart(
             icmp6LocalAddr.sin6_family = AF_INET6;
 
             // Set Remote IPv6 address.
-            icmp6RemoteAddr.sin6_addr = context->IpAddress.In6Addr;
-            icmp6RemoteAddr.sin6_port = _byteswap_ushort((USHORT)context->NetworkItem->RemoteEndpoint.Port);
+            icmp6RemoteAddr.sin6_addr = context->RemoteEndpoint.Address.In6Addr;
+            //icmp6RemoteAddr.sin6_port = _byteswap_ushort((USHORT)context->NetworkItem->RemoteEndpoint.Port);
 
             // Allocate ICMPv6 message.
             icmpReplyLength = ICMP_BUFFER_SIZE(sizeof(ICMPV6_ECHO_REPLY), icmpEchoBuffer);
@@ -189,7 +146,7 @@ NTSTATUS NetworkPingThreadStart(
 
                 if (_memicmp(
                     icmp6ReplyStruct->Address.sin6_addr,
-                    context->IpAddress.In6Addr.u.Word,
+                    context->RemoteEndpoint.Address.In6Addr.u.Word,
                     sizeof(icmp6ReplyStruct->Address.sin6_addr)
                     ) != 0)
                 {
@@ -228,7 +185,7 @@ NTSTATUS NetworkPingThreadStart(
             icmpLocalAddr = in4addr_any.s_addr;
 
             // Set Remote IPv4 address.
-            icmpRemoteAddr = context->IpAddress.InAddr.s_addr;
+            icmpRemoteAddr = context->RemoteEndpoint.Address.InAddr.s_addr;
 
             // Allocate ICMPv4 message.
             icmpReplyLength = ICMP_BUFFER_SIZE(sizeof(ICMP_ECHO_REPLY), icmpEchoBuffer);
@@ -264,7 +221,7 @@ NTSTATUS NetworkPingThreadStart(
                     InterlockedIncrement(&context->PingLossCount);
                 }
 
-                if (icmpReplyStruct->Address != context->IpAddress.InAddr.s_addr)
+                if (icmpReplyStruct->Address != context->RemoteEndpoint.Address.InAddr.s_addr)
                 {
                     InterlockedIncrement(&context->UnknownAddrCount);
                 }
@@ -445,13 +402,13 @@ INT_PTR CALLBACK NetworkPingWndProc(
             PhLayoutManagerLayout(&context->LayoutManager);
 
             // Convert IP Address to string format.
-            if (context->IpAddress.Type == PH_IPV4_NETWORK_TYPE)
+            if (context->RemoteEndpoint.Address.Type == PH_IPV4_NETWORK_TYPE)
             {
-                RtlIpv4AddressToString(&context->IpAddress.InAddr, context->IpAddressString);
+                RtlIpv4AddressToString(&context->RemoteEndpoint.Address.InAddr, context->IpAddressString);
             }
             else
             {
-                RtlIpv6AddressToString(&context->IpAddress.In6Addr, context->IpAddressString);
+                RtlIpv6AddressToString(&context->RemoteEndpoint.Address.In6Addr, context->IpAddressString);
             }
 
             SetWindowText(hwndDlg, PhaFormatString(L"Ping %s", context->IpAddressString)->Buffer);
