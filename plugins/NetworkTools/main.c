@@ -44,67 +44,111 @@ VOID NTAPI MenuItemCallback(
     )
 {
     PPH_PLUGIN_MENU_ITEM menuItem = (PPH_PLUGIN_MENU_ITEM)Parameter;
+    PPH_NETWORK_ITEM networkItem = (PPH_NETWORK_ITEM)menuItem->Context;
 
-    if (menuItem->Id == MAINMENU_ACTION_TRACERT)
+    switch (menuItem->Id)
     {
-        BOOLEAN success = FALSE;
-        PH_IP_ENDPOINT RemoteEndpoint;
-        PPH_STRING selectedChoice = NULL;
-
-        while (PhaChoiceDialog(
-            menuItem->OwnerWindow,
-            L"Tracert",
-            L"IP address for trace:",
-            NULL,
-            0,
-            NULL,
-            PH_CHOICE_DIALOG_USER_CHOICE,
-            &selectedChoice,
-            NULL,
-            SETTING_NAME_TRACERT_HISTORY
-            ))
+    case NETWORK_ACTION_PING:
+        PerformNetworkAction(NETWORK_ACTION_PING, networkItem);
+        break;
+    case NETWORK_ACTION_TRACEROUTE:
+        ShowTracertWindow(networkItem);
+        break;
+    case NETWORK_ACTION_WHOIS:
+        PerformNetworkAction(NETWORK_ACTION_WHOIS, networkItem);
+        break;
+    case NETWORK_ACTION_PATHPING:
+        PerformNetworkAction(NETWORK_ACTION_PATHPING, networkItem);
+        break;
+    case MAINMENU_ACTION_PING:
         {
-            PWSTR terminator = NULL;
 
-            if (NT_SUCCESS(RtlIpv4StringToAddress(selectedChoice->Buffer, TRUE, &terminator, &RemoteEndpoint.Address.InAddr)))
-            {   
-                RemoteEndpoint.Address.Type = PH_IPV4_NETWORK_TYPE;
-                success = TRUE;
-                break;
-            }
+        }
+        break;
+    case MAINMENU_ACTION_TRACERT:
+        {
+            BOOLEAN success = FALSE;
+            PH_IP_ENDPOINT RemoteEndpoint;
+            PPH_STRING selectedChoice = NULL;
 
-            if (NT_SUCCESS(RtlIpv6StringToAddress(selectedChoice->Buffer, &terminator, &RemoteEndpoint.Address.In6Addr)))
+            while (PhaChoiceDialog(
+                menuItem->OwnerWindow,
+                L"Tracert",
+                L"IP address for trace:",
+                NULL,
+                0,
+                NULL,
+                PH_CHOICE_DIALOG_USER_CHOICE,
+                &selectedChoice,
+                NULL,
+                SETTING_NAME_TRACERT_HISTORY
+                ))
             {
-                RemoteEndpoint.Address.Type = PH_IPV6_NETWORK_TYPE;
-                success = TRUE;
-                break;
+                PWSTR terminator = NULL;
+
+                if (NT_SUCCESS(RtlIpv4StringToAddress(selectedChoice->Buffer, TRUE, &terminator, &RemoteEndpoint.Address.InAddr)))
+                {
+                    RemoteEndpoint.Address.Type = PH_IPV4_NETWORK_TYPE;
+                    success = TRUE;
+                    break;
+                }
+
+                if (NT_SUCCESS(RtlIpv6StringToAddress(selectedChoice->Buffer, &terminator, &RemoteEndpoint.Address.In6Addr)))
+                {
+                    RemoteEndpoint.Address.Type = PH_IPV6_NETWORK_TYPE;
+                    success = TRUE;
+                    break;
+                }
+            }
+
+            if (success)
+            {
+                ShowTracertWindowFromAddress(RemoteEndpoint);
             }
         }
-
-        if (success)
+        break;
+    case MAINMENU_ACTION_WHOIS:
         {
-            ShowTracertWindowFromAddress(RemoteEndpoint);
-        }
-    }
-    else
-    {
-        PPH_NETWORK_ITEM networkItem = (PPH_NETWORK_ITEM)menuItem->Context;
+            BOOLEAN success = FALSE;
+            PH_IP_ENDPOINT RemoteEndpoint;
+            PPH_STRING selectedChoice = NULL;
 
-        switch (menuItem->Id)
-        {
-        case NETWORK_ACTION_PING:
-            PerformNetworkAction(NETWORK_ACTION_PING, networkItem);
-            break;
-        case NETWORK_ACTION_TRACEROUTE:
-            ShowTracertWindow(networkItem);
-            break;
-        case NETWORK_ACTION_WHOIS:
-            PerformNetworkAction(NETWORK_ACTION_WHOIS, networkItem);
-            break;
-        case NETWORK_ACTION_PATHPING:
-            PerformNetworkAction(NETWORK_ACTION_PATHPING, networkItem);
-            break;
+            while (PhaChoiceDialog(
+                menuItem->OwnerWindow,
+                L"Whois",
+                L"IP address for Whois:",
+                NULL,
+                0,
+                NULL,
+                PH_CHOICE_DIALOG_USER_CHOICE,
+                &selectedChoice,
+                NULL,
+                SETTING_NAME_TRACERT_HISTORY
+                ))
+            {
+                PWSTR terminator = NULL;
+
+                if (NT_SUCCESS(RtlIpv4StringToAddress(selectedChoice->Buffer, TRUE, &terminator, &RemoteEndpoint.Address.InAddr)))
+                {
+                    RemoteEndpoint.Address.Type = PH_IPV4_NETWORK_TYPE;
+                    success = TRUE;
+                    break;
+                }
+
+                if (NT_SUCCESS(RtlIpv6StringToAddress(selectedChoice->Buffer, &terminator, &RemoteEndpoint.Address.In6Addr)))
+                {
+                    RemoteEndpoint.Address.Type = PH_IPV6_NETWORK_TYPE;
+                    success = TRUE;
+                    break;
+                }
+            }
+
+            if (success)
+            {
+                PerformTracertAction(NETWORK_ACTION_WHOIS, RemoteEndpoint);
+            }
         }
+        break;
     }
 }
 
@@ -121,6 +165,7 @@ VOID NTAPI MainMenuInitializingCallback(
     PhInsertEMenuItem(menuInfo->Menu, PhCreateEMenuItem(PH_EMENU_SEPARATOR, 0, NULL, NULL, NULL), -1);
     PhInsertEMenuItem(menuInfo->Menu, PhPluginCreateEMenuItem(PluginInstance, 0, MAINMENU_ACTION_TRACERT, L"Ping IP address...", NULL), -1);
     PhInsertEMenuItem(menuInfo->Menu, PhPluginCreateEMenuItem(PluginInstance, 0, MAINMENU_ACTION_TRACERT, L"Traceroute IP address...", NULL), -1);
+    PhInsertEMenuItem(menuInfo->Menu, PhPluginCreateEMenuItem(PluginInstance, 0, MAINMENU_ACTION_WHOIS, L"Whois IP address...", NULL), -1);
 }
 
 VOID NTAPI NetworkMenuInitializingCallback(
@@ -182,7 +227,11 @@ LOGICAL DllMain(
                 { ScalableIntegerPairSettingType, SETTING_NAME_TRACERT_WINDOW_SIZE, L"@96|600,365" },
                 { StringSettingType, SETTING_NAME_TRACERT_COLUMNS, L"" },
                 { StringSettingType, SETTING_NAME_TRACERT_HISTORY, L"" },
+
+                { IntegerPairSettingType, SETTING_NAME_OUTPUT_WINDOW_POSITION, L"0,0" },
+                { ScalableIntegerPairSettingType, SETTING_NAME_OUTPUT_WINDOW_SIZE, L"@96|600,365" },
             };
+
 
             PluginInstance = PhRegisterPlugin(PLUGIN_NAME, Instance, &info);
 

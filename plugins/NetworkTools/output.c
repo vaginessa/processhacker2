@@ -45,7 +45,7 @@ INT_PTR CALLBACK NetworkOutputDlgProc(
 
         if (uMsg == WM_DESTROY)
         {
-            //PhSaveWindowPlacementToSetting(SETTING_NAME_TRACERT_WINDOW_POSITION, SETTING_NAME_TRACERT_WINDOW_SIZE, hwndDlg);
+            PhSaveWindowPlacementToSetting(SETTING_NAME_OUTPUT_WINDOW_POSITION, SETTING_NAME_OUTPUT_WINDOW_SIZE, hwndDlg);
             PhDeleteLayoutManager(&context->LayoutManager);
 
             if (context->ProcessHandle)
@@ -85,8 +85,8 @@ INT_PTR CALLBACK NetworkOutputDlgProc(
             PhAddLayoutItem(&context->LayoutManager, GetDlgItem(hwndDlg, IDC_MORE_INFO), NULL, PH_ANCHOR_BOTTOM | PH_ANCHOR_LEFT);
             PhAddLayoutItem(&context->LayoutManager, GetDlgItem(hwndDlg, IDOK), NULL, PH_ANCHOR_BOTTOM | PH_ANCHOR_RIGHT);
 
-            windowRectangle.Position = PhGetIntegerPairSetting(SETTING_NAME_TRACERT_WINDOW_POSITION);
-            windowRectangle.Size = PhGetScalableIntegerPairSetting(SETTING_NAME_TRACERT_WINDOW_SIZE, TRUE).Pair;
+            windowRectangle.Position = PhGetIntegerPairSetting(SETTING_NAME_OUTPUT_WINDOW_POSITION);
+            windowRectangle.Size = PhGetScalableIntegerPairSetting(SETTING_NAME_OUTPUT_WINDOW_SIZE, TRUE).Pair;
 
             if (MinimumSize.left == -1)
             {
@@ -108,7 +108,7 @@ INT_PTR CALLBACK NetworkOutputDlgProc(
             }
             else
             {
-                PhLoadWindowPlacementFromSetting(SETTING_NAME_TRACERT_WINDOW_POSITION, SETTING_NAME_TRACERT_WINDOW_SIZE, hwndDlg);
+                PhLoadWindowPlacementFromSetting(SETTING_NAME_OUTPUT_WINDOW_POSITION, SETTING_NAME_OUTPUT_WINDOW_SIZE, hwndDlg);
             }
 
             if (context->RemoteEndpoint.Address.Type == PH_IPV4_NETWORK_TYPE)
@@ -122,18 +122,6 @@ INT_PTR CALLBACK NetworkOutputDlgProc(
 
             switch (context->Action)
             {
-            case NETWORK_ACTION_TRACEROUTE:
-                {
-                    HANDLE dialogThread = INVALID_HANDLE_VALUE;
-
-                    Static_SetText(context->WindowHandle,
-                        PhaFormatString(L"Tracing route to %s...", context->IpAddressString)->Buffer
-                        );
-
-                    if (dialogThread = PhCreateThread(0, NetworkTracertThreadStart, (PVOID)context))
-                        NtClose(dialogThread);
-                }
-                break;
             case NETWORK_ACTION_WHOIS:
                 {
                     HANDLE dialogThread = INVALID_HANDLE_VALUE;
@@ -275,31 +263,33 @@ INT_PTR CALLBACK NetworkOutputDlgProc(
         break;
     case NTM_RECEIVEDWHOIS:
         {
-            OEM_STRING inputString;
-            UNICODE_STRING convertedString;
+            //OEM_STRING inputString;
+            //UNICODE_STRING convertedString;
             PH_STRING_BUILDER receivedString;
 
             if (lParam != 0)
             {
-                inputString.Buffer = (PCHAR)lParam;
-                inputString.Length = (USHORT)wParam;
+                //inputString.Buffer = (PCHAR)lParam;
+                //inputString.Length = (USHORT)wParam;
 
-                if (NT_SUCCESS(RtlOemStringToUnicodeString(&convertedString, &inputString, TRUE)))
+                PPH_STRING convertedString = (PPH_STRING)lParam;
+
+                //if (NT_SUCCESS(RtlOemStringToUnicodeString(&convertedString, &inputString, TRUE)))
                 {
                     USHORT i;
 
                     PhInitializeStringBuilder(&receivedString, PAGE_SIZE);
 
                     // Convert carriage returns.
-                    for (i = 0; i < convertedString.Length; i++)
+                    for (i = 0; i < convertedString->Length; i++)
                     {
-                        if (convertedString.Buffer[i] == '\n')
+                        if (convertedString->Buffer[i] == '\n')
                         {
                             PhAppendStringBuilder2(&receivedString, L"\r\n");
                         }
                         else
                         {
-                            PhAppendCharStringBuilder(&receivedString, convertedString.Buffer[i]);
+                            PhAppendCharStringBuilder(&receivedString, convertedString->Buffer[i]);
                         }
                     }
 
@@ -321,10 +311,10 @@ INT_PTR CALLBACK NetworkOutputDlgProc(
                     SendMessage(context->OutputHandle, WM_VSCROLL, SB_TOP, 0);
 
                     PhDeleteStringBuilder(&receivedString);
-                    RtlFreeUnicodeString(&convertedString);
+                    //RtlFreeUnicodeString(&convertedString);
                 }
 
-                PhFree((PVOID)lParam);
+                //PhFree((PVOID)lParam);
             }
         }
         break;
@@ -402,6 +392,32 @@ VOID PerformNetworkAction(
 
     context->Action = Action;
     context->RemoteEndpoint = NetworkItem->RemoteEndpoint;
+
+    if (context->Action == NETWORK_ACTION_PING)
+    {
+        if (dialogThread = PhCreateThread(0, PhNetworkPingDialogThreadStart, (PVOID)context))
+            NtClose(dialogThread);
+    }
+    else
+    {
+        if (dialogThread = PhCreateThread(0, PhNetworkOutputDialogThreadStart, (PVOID)context))
+            NtClose(dialogThread);
+    }
+}
+
+VOID PerformTracertAction(
+    _In_ PH_NETWORK_ACTION Action,
+    _In_ PH_IP_ENDPOINT RemoteEndpoint
+    )
+{
+    HANDLE dialogThread = INVALID_HANDLE_VALUE;
+    PNETWORK_OUTPUT_CONTEXT context;
+
+    context = (PNETWORK_OUTPUT_CONTEXT)PhAllocate(sizeof(NETWORK_OUTPUT_CONTEXT));
+    memset(context, 0, sizeof(NETWORK_OUTPUT_CONTEXT));
+
+    context->Action = Action;
+    context->RemoteEndpoint = RemoteEndpoint;
 
     if (context->Action == NETWORK_ACTION_PING)
     {

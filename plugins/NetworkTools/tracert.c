@@ -625,9 +625,6 @@ INT_PTR CALLBACK TracertDlgProc(
         {
             PhSaveListViewColumnsToSetting(SETTING_NAME_TRACERT_COLUMNS, context->OutputHandle);
             PhSaveWindowPlacementToSetting(SETTING_NAME_TRACERT_WINDOW_POSITION, SETTING_NAME_TRACERT_WINDOW_SIZE, hwndDlg);
-            PhDeleteLayoutManager(&context->LayoutManager);
-
-            context->OutputHandle = NULL;
 
             PhSaveWindowPlacementToSetting(
                 SETTING_NAME_PING_WINDOW_POSITION,
@@ -640,6 +637,9 @@ INT_PTR CALLBACK TracertDlgProc(
 
             if (context->FontHandle)
                 DeleteObject(context->FontHandle);
+
+            PhDeleteLayoutManager(&context->LayoutManager);
+            context->OutputHandle = NULL;
 
             RemoveProp(hwndDlg, L"Context");
             PhFree(context);
@@ -709,15 +709,6 @@ INT_PTR CALLBACK TracertDlgProc(
             else
             {
                 PhLoadWindowPlacementFromSetting(SETTING_NAME_PING_WINDOW_POSITION, SETTING_NAME_PING_WINDOW_SIZE, hwndDlg);
-            }
-
-            if (context->RemoteEndpoint.Address.Type == PH_IPV4_NETWORK_TYPE)
-            {
-                RtlIpv4AddressToString(&context->RemoteEndpoint.Address.InAddr, context->IpAddressString);
-            }
-            else
-            {
-                RtlIpv6AddressToString(&context->RemoteEndpoint.Address.In6Addr, context->IpAddressString);
             }
 
             HANDLE dialogThread = INVALID_HANDLE_VALUE;
@@ -833,6 +824,15 @@ VOID ShowTracertWindow(
 
     context->RemoteEndpoint = NetworkItem->RemoteEndpoint;
 
+    if (NetworkItem->RemoteEndpoint.Address.Type == PH_IPV4_NETWORK_TYPE)
+    {
+        RtlIpv4AddressToString(&NetworkItem->RemoteEndpoint.Address.InAddr, context->IpAddressString);
+    }
+    else if (NetworkItem->RemoteEndpoint.Address.Type == PH_IPV6_NETWORK_TYPE)
+    {
+        RtlIpv6AddressToString(&NetworkItem->RemoteEndpoint.Address.In6Addr, context->IpAddressString);
+    }
+
     if (dialogThread = PhCreateThread(0, TracertDialogThreadStart, (PVOID)context))
     {
         NtClose(dialogThread);
@@ -850,6 +850,15 @@ VOID ShowTracertWindowFromAddress(
     memset(context, 0, sizeof(NETWORK_OUTPUT_CONTEXT));
 
     context->RemoteEndpoint = RemoteEndpoint;
+
+    if (RemoteEndpoint.Address.Type == PH_IPV4_NETWORK_TYPE)
+    {
+        RtlIpv4AddressToString(&RemoteEndpoint.Address.InAddr, context->IpAddressString);
+    }
+    else if (RemoteEndpoint.Address.Type == PH_IPV6_NETWORK_TYPE)
+    {
+        RtlIpv6AddressToString(&RemoteEndpoint.Address.In6Addr, context->IpAddressString);
+    }
 
     if (dialogThread = PhCreateThread(0, TracertDialogThreadStart, (PVOID)context))
     {

@@ -50,6 +50,9 @@
 #define SETTING_NAME_TRACERT_COLUMNS (PLUGIN_NAME L".TracertColumns")
 #define SETTING_NAME_TRACERT_HISTORY (PLUGIN_NAME L".TracertAddresses")
 
+#define SETTING_NAME_OUTPUT_WINDOW_POSITION (PLUGIN_NAME L".OutputWindowPosition")
+#define SETTING_NAME_OUTPUT_WINDOW_SIZE (PLUGIN_NAME L".OutputWindowSize")
+
 // ICMP Packet Length: (msdn: IcmpSendEcho2/Icmp6SendEcho2)
 // The buffer must be large enough to hold at least one ICMP_ECHO_REPLY or ICMPV6_ECHO_REPLY structure
 //       + the number of bytes of data specified in the RequestSize parameter.
@@ -76,7 +79,10 @@ typedef enum _PH_NETWORK_ACTION
     NETWORK_ACTION_WHOIS,
     NETWORK_ACTION_FINISH,
     NETWORK_ACTION_PATHPING,
-    MAINMENU_ACTION_TRACERT
+
+    MAINMENU_ACTION_PING,
+    MAINMENU_ACTION_TRACERT,
+    MAINMENU_ACTION_WHOIS,
 } PH_NETWORK_ACTION;
 
 // output
@@ -157,5 +163,11 @@ VOID ShowTracertWindow(
 VOID ShowTracertWindowFromAddress(
     _In_ PH_IP_ENDPOINT RemoteEndpoint
     );
+
+VOID PerformTracertAction(
+    _In_ PH_NETWORK_ACTION Action,
+    _In_ PH_IP_ENDPOINT RemoteEndpoint
+    );
+
 
 #endif
