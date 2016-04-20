@@ -302,8 +302,6 @@ extern HWND CommitGraphHandle;
 extern HWND IoGraphHandle;
 
 VOID ToolbarCreateGraphs(VOID);
-VOID ToolbarUpdateGraphs(VOID);
-VOID ToolbarUpdateGraphsInfo(LPNMHDR Header);
 
 // statusbar.c
 
@@ -406,5 +404,16 @@ typedef struct _CUSTOMIZE_CONTEXT
     HFONT FontHandle;
     HIMAGELIST ImageListHandle;
 } CUSTOMIZE_CONTEXT, *PCUSTOMIZE_CONTEXT;
+
+
+
+PVOID RegisterRebarGraph(
+    _In_ PWSTR GraphName,
+    _In_ PTOOLSTATUS_QUERY_GRAPH_ENABLED QueryEnabledCallback,
+    _In_ PTOOLSTATUS_SET_GRAPH_ENABLED SetEnabledCallback,
+    _In_ PTOOLSTATUS_CREATE_GRAPH CreateGraphCallback,
+    _In_ PTOOLSTATUS_UPDATE_GRAPH UpdateGraphCallback,
+    _In_ PTOOLSTATUS_NOTIFY_GRAPH NotifyGraphCallback
+    );
 
 #endif

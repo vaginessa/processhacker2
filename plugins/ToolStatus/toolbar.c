@@ -270,8 +270,6 @@ VOID RebarLoadSettings(
         if (StatusBarHandle && IsWindowVisible(StatusBarHandle))
             ShowWindow(StatusBarHandle, SW_HIDE);
     }
-
-    ToolbarCreateGraphs();
 }
 
 VOID ToolbarLoadSettings(
@@ -822,7 +820,7 @@ VOID ReBarLoadLayoutSettings(
         PhStringToInteger64(&stylePart, 10, &styleInteger);
 
         if ((oldBandIndex = (UINT)SendMessage(RebarHandle, RB_IDTOINDEX, (UINT)idInteger, 0)) == -1)
-            break;
+            continue;
 
         if (oldBandIndex != bandIndex)
         {

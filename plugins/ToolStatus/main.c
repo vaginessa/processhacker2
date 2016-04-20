@@ -67,7 +67,8 @@ TOOLSTATUS_INTERFACE PluginInterface =
     WordMatchStringRef,
     RegisterTabSearch,
     &SearchChangedEvent,
-    RegisterTabInfo
+    RegisterTabInfo,
+    RegisterRebarGraph
 };
 
 static ULONG TargetingMode = 0;
@@ -84,6 +85,25 @@ static PH_CALLBACK_REGISTRATION TabPageCallbackRegistration;
 static PH_CALLBACK_REGISTRATION ProcessTreeNewInitializingCallbackRegistration;
 static PH_CALLBACK_REGISTRATION ServiceTreeNewInitializingCallbackRegistration;
 static PH_CALLBACK_REGISTRATION NetworkTreeNewInitializingCallbackRegistration;
+
+PPH_LIST GraphList = NULL;
+
+typedef struct _REBAR_GRAPH_ENTRY
+{
+    ULONG Id;
+    BOOLEAN Enabled;
+    PWSTR GraphName;
+    HWND GraphHandle;
+
+    PTOOLSTATUS_QUERY_GRAPH_ENABLED QueryEnabledCallback;
+    PTOOLSTATUS_SET_GRAPH_ENABLED SetEnabledCallback;
+    PTOOLSTATUS_CREATE_GRAPH CreateGraphCallback;
+    PTOOLSTATUS_UPDATE_GRAPH UpdateGraphCallback;
+    PTOOLSTATUS_NOTIFY_GRAPH NotifyGraphCallback;
+} REBAR_GRAPH_ENTRY, *PREBAR_GRAPH_ENTRY;
+
+
+
 
 PPH_STRING GetSearchboxText(
     VOID
@@ -104,11 +124,18 @@ VOID NTAPI ProcessesUpdatedCallback(
 
     PhPluginGetSystemStatistics(&SystemStatistics);
 
-    if (UpdateGraphs)
-        ToolbarUpdateGraphs();
-
     if (ToolStatusConfig.StatusBarEnabled)
         StatusBarUpdate(FALSE);
+
+    for (ULONG i = 0; i < GraphList->Count; i++)
+    {
+        PREBAR_GRAPH_ENTRY rebarGraph = GraphList->Items[i];
+
+        if (rebarGraph->Enabled)
+        {
+            rebarGraph->UpdateGraphCallback();
+        }
+    }
 }
 
 VOID NTAPI TreeNewInitializingCallback(
@@ -195,6 +222,38 @@ HWND GetCurrentTreeNewHandle(
     return treeNewHandle;
 }
 
+
+
+
+PVOID RegisterRebarGraph(
+    _In_ PWSTR GraphName,
+    _In_ PTOOLSTATUS_QUERY_GRAPH_ENABLED QueryEnabledCallback,
+    _In_ PTOOLSTATUS_SET_GRAPH_ENABLED SetEnabledCallback,
+    _In_ PTOOLSTATUS_CREATE_GRAPH CreateGraphCallback,
+    _In_ PTOOLSTATUS_UPDATE_GRAPH UpdateGraphCallback,
+    _In_ PTOOLSTATUS_NOTIFY_GRAPH NotifyGraphCallback
+    )
+{
+    static ULONG count = 0x1000;
+
+    PREBAR_GRAPH_ENTRY rebarGraph = PhAllocate(sizeof(REBAR_GRAPH_ENTRY));
+    memset(rebarGraph, 0, sizeof(REBAR_GRAPH_ENTRY));
+
+    rebarGraph->Id = count++;
+    rebarGraph->GraphName = GraphName;
+    rebarGraph->QueryEnabledCallback = QueryEnabledCallback;
+    rebarGraph->SetEnabledCallback = SetEnabledCallback;
+    rebarGraph->CreateGraphCallback = CreateGraphCallback;
+    rebarGraph->UpdateGraphCallback = UpdateGraphCallback;
+    rebarGraph->NotifyGraphCallback = NotifyGraphCallback;
+
+    PhAddItemList(GraphList, rebarGraph);
+
+    return NULL;
+}
+
+
+
 VOID ShowCustomizeMenu(
     VOID
     )
@@ -207,10 +266,19 @@ VOID ShowCustomizeMenu(
 
     menu = PhCreateEMenu();
     PhInsertEMenuItem(menu, PhCreateEMenuItem(0, COMMAND_ID_ENABLE_SEARCHBOX, L"Search box", NULL, NULL), -1);
-    PhInsertEMenuItem(menu, PhCreateEMenuItem(0, COMMAND_ID_ENABLE_CPU_GRAPH, L"CPU history", NULL, NULL), -1);
-    PhInsertEMenuItem(menu, PhCreateEMenuItem(0, COMMAND_ID_ENABLE_IO_GRAPH, L"I/O history", NULL, NULL), -1);
-    PhInsertEMenuItem(menu, PhCreateEMenuItem(0, COMMAND_ID_ENABLE_MEMORY_GRAPH, L"Physical memory history", NULL, NULL), -1);
-    PhInsertEMenuItem(menu, PhCreateEMenuItem(0, COMMAND_ID_ENABLE_COMMIT_GRAPH, L"Commit charge history", NULL, NULL), -1);
+
+    for (ULONG i = 0; i < GraphList->Count; i++)
+    {
+        PREBAR_GRAPH_ENTRY rebarGraph = GraphList->Items[i];
+
+        PhInsertEMenuItem(menu, PhCreateEMenuItem(0, rebarGraph->Id, rebarGraph->GraphName, NULL, rebarGraph), -1);
+
+        if (rebarGraph->QueryEnabledCallback())
+        {
+            PhSetFlagsEMenuItem(menu, rebarGraph->Id, PH_EMENU_CHECKED, PH_EMENU_CHECKED);
+        }
+    }
+
     PhInsertEMenuItem(menu, PhCreateEMenuItem(PH_EMENU_SEPARATOR, 0, NULL, NULL, NULL), -1);
     PhInsertEMenuItem(menu, PhCreateEMenuItem(0, COMMAND_ID_TOOLBAR_LOCKUNLOCK, L"Lock the toolbar", NULL, NULL), -1);
     PhInsertEMenuItem(menu, PhCreateEMenuItem(0, COMMAND_ID_TOOLBAR_CUSTOMIZE, L"Customize...", NULL, NULL), -1);
@@ -218,26 +286,6 @@ VOID ShowCustomizeMenu(
     if (ToolStatusConfig.SearchBoxEnabled)
     {
         PhSetFlagsEMenuItem(menu, COMMAND_ID_ENABLE_SEARCHBOX, PH_EMENU_CHECKED, PH_EMENU_CHECKED);
-    }
-
-    if (ToolStatusConfig.CpuGraphEnabled)
-    {
-        PhSetFlagsEMenuItem(menu, COMMAND_ID_ENABLE_CPU_GRAPH, PH_EMENU_CHECKED, PH_EMENU_CHECKED);
-    }
-
-    if (ToolStatusConfig.MemGraphEnabled)
-    {
-        PhSetFlagsEMenuItem(menu, COMMAND_ID_ENABLE_MEMORY_GRAPH, PH_EMENU_CHECKED, PH_EMENU_CHECKED);
-    }
-
-    if (ToolStatusConfig.CommitGraphEnabled)
-    {
-        PhSetFlagsEMenuItem(menu, COMMAND_ID_ENABLE_COMMIT_GRAPH, PH_EMENU_CHECKED, PH_EMENU_CHECKED);
-    }
-
-    if (ToolStatusConfig.IoGraphEnabled)
-    {
-        PhSetFlagsEMenuItem(menu, COMMAND_ID_ENABLE_IO_GRAPH, PH_EMENU_CHECKED, PH_EMENU_CHECKED);
     }
 
     if (ToolStatusConfig.ToolBarLocked)
@@ -256,118 +304,99 @@ VOID ShowCustomizeMenu(
 
     if (selectedItem && selectedItem->Id != -1)
     {
-        switch (selectedItem->Id)
+        if (selectedItem->Id == COMMAND_ID_ENABLE_SEARCHBOX)
         {
-        case COMMAND_ID_ENABLE_SEARCHBOX:
+            ToolStatusConfig.SearchBoxEnabled = !ToolStatusConfig.SearchBoxEnabled;
+
+            PhSetIntegerSetting(SETTING_NAME_TOOLSTATUS_CONFIG, ToolStatusConfig.Flags);
+
+            ToolbarLoadSettings();
+            ReBarSaveLayoutSettings();
+
+            if (ToolStatusConfig.SearchBoxEnabled)
             {
-                ToolStatusConfig.SearchBoxEnabled = !ToolStatusConfig.SearchBoxEnabled;
+                // Adding the Searchbox makes it focused,
+                // reset the focus back to the main window.
+                SetFocus(PhMainWndHandle);
+            }
+        }
+        else if (selectedItem->Id == COMMAND_ID_TOOLBAR_LOCKUNLOCK)
+        {
+            UINT bandCount;
+            UINT bandIndex;
 
-                PhSetIntegerSetting(SETTING_NAME_TOOLSTATUS_CONFIG, ToolStatusConfig.Flags);
+            bandCount = (UINT)SendMessage(RebarHandle, RB_GETBANDCOUNT, 0, 0);
 
-                ToolbarLoadSettings();
-                ReBarSaveLayoutSettings();
-
-                if (ToolStatusConfig.SearchBoxEnabled)
+            for (bandIndex = 0; bandIndex < bandCount; bandIndex++)
+            {
+                REBARBANDINFO rebarBandInfo =
                 {
-                    // Adding the Searchbox makes it focused,
-                    // reset the focus back to the main window.
-                    SetFocus(PhMainWndHandle);
-                }
-            }
-            break;
-        case COMMAND_ID_ENABLE_CPU_GRAPH:
-            {
-                ToolStatusConfig.CpuGraphEnabled = !ToolStatusConfig.CpuGraphEnabled;
+                    REBARBANDINFO_V6_SIZE,
+                    RBBIM_STYLE
+                };
 
-                PhSetIntegerSetting(SETTING_NAME_TOOLSTATUS_CONFIG, ToolStatusConfig.Flags);
+                SendMessage(RebarHandle, RB_GETBANDINFO, bandIndex, (LPARAM)&rebarBandInfo);
 
-                ToolbarLoadSettings();
-                ReBarSaveLayoutSettings();
-            }
-            break;
-        case COMMAND_ID_ENABLE_MEMORY_GRAPH:
-            {
-                ToolStatusConfig.MemGraphEnabled = !ToolStatusConfig.MemGraphEnabled;
-
-                PhSetIntegerSetting(SETTING_NAME_TOOLSTATUS_CONFIG, ToolStatusConfig.Flags);
-
-                ToolbarLoadSettings();
-                ReBarSaveLayoutSettings();
-            }
-            break;
-        case COMMAND_ID_ENABLE_COMMIT_GRAPH:
-            {
-                ToolStatusConfig.CommitGraphEnabled = !ToolStatusConfig.CommitGraphEnabled;
-
-                PhSetIntegerSetting(SETTING_NAME_TOOLSTATUS_CONFIG, ToolStatusConfig.Flags);
-
-                ToolbarLoadSettings();
-                ReBarSaveLayoutSettings();
-            }
-            break;
-        case COMMAND_ID_ENABLE_IO_GRAPH:
-            {
-                ToolStatusConfig.IoGraphEnabled = !ToolStatusConfig.IoGraphEnabled;
-
-                PhSetIntegerSetting(SETTING_NAME_TOOLSTATUS_CONFIG, ToolStatusConfig.Flags);
-
-                ToolbarLoadSettings();
-                ReBarSaveLayoutSettings();
-            }
-            break;
-        case COMMAND_ID_TOOLBAR_LOCKUNLOCK:
-            {
-                UINT bandCount;
-                UINT bandIndex;
-
-                bandCount = (UINT)SendMessage(RebarHandle, RB_GETBANDCOUNT, 0, 0);
-
-                for (bandIndex = 0; bandIndex < bandCount; bandIndex++)
+                if (!(rebarBandInfo.fStyle & RBBS_GRIPPERALWAYS))
                 {
-                    REBARBANDINFO rebarBandInfo =
-                    {
-                        REBARBANDINFO_V6_SIZE,
-                        RBBIM_STYLE
-                    };
+                    // Removing the RBBS_NOGRIPPER style doesn't remove the gripper padding,
+                    // So we toggle the RBBS_GRIPPERALWAYS style to make the Toolbar remove the padding.
 
-                    SendMessage(RebarHandle, RB_GETBANDINFO, bandIndex, (LPARAM)&rebarBandInfo);
-
-                    if (!(rebarBandInfo.fStyle & RBBS_GRIPPERALWAYS))
-                    {
-                        // Removing the RBBS_NOGRIPPER style doesn't remove the gripper padding,
-                        // So we toggle the RBBS_GRIPPERALWAYS style to make the Toolbar remove the padding.
-
-                        rebarBandInfo.fStyle |= RBBS_GRIPPERALWAYS;
-
-                        SendMessage(RebarHandle, RB_SETBANDINFO, bandIndex, (LPARAM)&rebarBandInfo);
-
-                        rebarBandInfo.fStyle &= ~RBBS_GRIPPERALWAYS;
-                    }
-
-                    if (rebarBandInfo.fStyle & RBBS_NOGRIPPER)
-                    {
-                        rebarBandInfo.fStyle &= ~RBBS_NOGRIPPER;
-                    }
-                    else
-                    {
-                        rebarBandInfo.fStyle |= RBBS_NOGRIPPER;
-                    }
+                    rebarBandInfo.fStyle |= RBBS_GRIPPERALWAYS;
 
                     SendMessage(RebarHandle, RB_SETBANDINFO, bandIndex, (LPARAM)&rebarBandInfo);
+
+                    rebarBandInfo.fStyle &= ~RBBS_GRIPPERALWAYS;
                 }
 
-                ToolStatusConfig.ToolBarLocked = !ToolStatusConfig.ToolBarLocked;
+                if (rebarBandInfo.fStyle & RBBS_NOGRIPPER)
+                {
+                    rebarBandInfo.fStyle &= ~RBBS_NOGRIPPER;
+                }
+                else
+                {
+                    rebarBandInfo.fStyle |= RBBS_NOGRIPPER;
+                }
 
-                PhSetIntegerSetting(SETTING_NAME_TOOLSTATUS_CONFIG, ToolStatusConfig.Flags);
-
-                ToolbarLoadSettings();
+                SendMessage(RebarHandle, RB_SETBANDINFO, bandIndex, (LPARAM)&rebarBandInfo);
             }
-            break;
-        case COMMAND_ID_TOOLBAR_CUSTOMIZE:
+
+            ToolStatusConfig.ToolBarLocked = !ToolStatusConfig.ToolBarLocked;
+
+            PhSetIntegerSetting(SETTING_NAME_TOOLSTATUS_CONFIG, ToolStatusConfig.Flags);
+
+            ToolbarLoadSettings();
+        }
+        else if (selectedItem->Id == COMMAND_ID_TOOLBAR_CUSTOMIZE)
+        {
+            ToolBarShowCustomizeDialog();
+        }
+        else
+        {
+            PREBAR_GRAPH_ENTRY rebarGraph = selectedItem->Context;
+
+            rebarGraph->SetEnabledCallback();
+            rebarGraph->Enabled = rebarGraph->QueryEnabledCallback();
+
+            if (rebarGraph->Enabled)
             {
-                ToolBarShowCustomizeDialog();
+                rebarGraph->GraphHandle = rebarGraph->CreateGraphCallback();
+
+                if (!RebarBandExists(rebarGraph->Id))
+                    RebarBandInsert(rebarGraph->Id, rebarGraph->GraphHandle, 145, (UINT)SendMessage(RebarHandle, RB_GETROWHEIGHT, 0, 0)); // 85
+
+                if (rebarGraph->GraphHandle && !IsWindowVisible(rebarGraph->GraphHandle))
+                    ShowWindow(rebarGraph->GraphHandle, SW_SHOW);
             }
-            break;
+            else
+            {
+                if (RebarBandExists(rebarGraph->Id))
+                    RebarBandRemove(rebarGraph->Id);
+            }
+
+
+            ToolbarLoadSettings();
+            ReBarSaveLayoutSettings();
         }
     }
 
@@ -1029,16 +1058,20 @@ LRESULT CALLBACK MainWndSubclassProc(
 
                 goto DefaultWndProc;
             }
-            else if (
-                CpuGraphHandle && hdr->hwndFrom == CpuGraphHandle ||
-                MemGraphHandle && hdr->hwndFrom == MemGraphHandle ||
-                CommitGraphHandle && hdr->hwndFrom == CommitGraphHandle ||
-                IoGraphHandle && hdr->hwndFrom == IoGraphHandle
-                )
-            {
-                ToolbarUpdateGraphsInfo(hdr);
 
-                goto DefaultWndProc;
+            if (hdr->code == GCN_GETDRAWINFO || hdr->code == GCN_GETTOOLTIPTEXT || hdr->code == GCN_MOUSEEVENT)
+            {
+                for (ULONG i = 0; i < GraphList->Count; i++)
+                {
+                    PREBAR_GRAPH_ENTRY rebarGraph = GraphList->Items[i];
+
+                    if (rebarGraph->Enabled && hdr->hwndFrom == rebarGraph->GraphHandle)
+                    {
+                        rebarGraph->NotifyGraphCallback(hdr);
+
+                        goto DefaultWndProc;
+                    }
+                }
             }
         }
         break;
@@ -1292,6 +1325,23 @@ VOID NTAPI MainWindowShowingCallback(
     SetWindowSubclass(PhMainWndHandle, MainWndSubclassProc, 0, 0);
 
     ToolbarLoadSettings();
+    
+    for (ULONG i = 0; i < GraphList->Count; i++)
+    {
+        PREBAR_GRAPH_ENTRY rebarGraph = GraphList->Items[i];
+
+        if (rebarGraph->Enabled = rebarGraph->QueryEnabledCallback())
+        {
+            rebarGraph->GraphHandle = rebarGraph->CreateGraphCallback();
+
+            if (!RebarBandExists(rebarGraph->Id))
+                RebarBandInsert(rebarGraph->Id, rebarGraph->GraphHandle, 145, (UINT)SendMessage(RebarHandle, RB_GETROWHEIGHT, 0, 0)); // 85
+
+            if (rebarGraph->GraphHandle && !IsWindowVisible(rebarGraph->GraphHandle))
+                ShowWindow(rebarGraph->GraphHandle, SW_SHOW);
+        }
+    }
+
     ReBarLoadLayoutSettings();
     StatusBarLoadSettings();
 
@@ -1312,6 +1362,9 @@ VOID NTAPI LoadCallback(
     DisplayStyle = (TOOLBAR_DISPLAY_STYLE)PhGetIntegerSetting(SETTING_NAME_TOOLBARDISPLAYSTYLE);
     SearchBoxDisplayMode = (SEARCHBOX_DISPLAY_MODE)PhGetIntegerSetting(SETTING_NAME_SEARCHBOXDISPLAYMODE);
     UpdateGraphs = !PhGetIntegerSetting(L"StartHidden");
+    
+    GraphList = PhCreateList(5);
+    ToolbarCreateGraphs();
 }
 
 VOID NTAPI ShowOptionsCallback(
