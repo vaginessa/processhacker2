@@ -263,58 +263,47 @@ INT_PTR CALLBACK NetworkOutputDlgProc(
         break;
     case NTM_RECEIVEDWHOIS:
         {
-            //OEM_STRING inputString;
-            //UNICODE_STRING convertedString;
-            PH_STRING_BUILDER receivedString;
-
             if (lParam != 0)
             {
-                //inputString.Buffer = (PCHAR)lParam;
-                //inputString.Length = (USHORT)wParam;
-
+                USHORT i;
+                PH_STRING_BUILDER receivedString;
                 PPH_STRING convertedString = (PPH_STRING)lParam;
 
-                //if (NT_SUCCESS(RtlOemStringToUnicodeString(&convertedString, &inputString, TRUE)))
+                PhInitializeStringBuilder(&receivedString, PAGE_SIZE);
+
+                // Convert carriage returns.
+                for (i = 0; i < convertedString->Length / sizeof(WCHAR); i++)
                 {
-                    USHORT i;
-
-                    PhInitializeStringBuilder(&receivedString, PAGE_SIZE);
-
-                    // Convert carriage returns.
-                    for (i = 0; i < convertedString->Length; i++)
+                    if (convertedString->Buffer[i] == '\n')
                     {
-                        if (convertedString->Buffer[i] == '\n')
-                        {
-                            PhAppendStringBuilder2(&receivedString, L"\r\n");
-                        }
-                        else
-                        {
-                            PhAppendCharStringBuilder(&receivedString, convertedString->Buffer[i]);
-                        }
+                        PhAppendStringBuilder2(&receivedString, L"\r\n");
                     }
-
-                    // Remove leading newlines.
-                    if (receivedString.String->Length >= 2 * 2 &&
-                        receivedString.String->Buffer[0] == '\r' &&
-                        receivedString.String->Buffer[1] == '\n')
+                    else
                     {
-                        PhRemoveStringBuilder(&receivedString, 0, 2);
+                        PhAppendCharStringBuilder(&receivedString, convertedString->Buffer[i]);
                     }
-
-                    SetWindowText(context->OutputHandle, receivedString.String->Buffer);
-                    SendMessage(
-                        context->OutputHandle,
-                        EM_SETSEL,
-                        receivedString.String->Length / 2 - 1,
-                        receivedString.String->Length / 2 - 1
-                        );
-                    SendMessage(context->OutputHandle, WM_VSCROLL, SB_TOP, 0);
-
-                    PhDeleteStringBuilder(&receivedString);
-                    //RtlFreeUnicodeString(&convertedString);
                 }
 
-                //PhFree((PVOID)lParam);
+                // Remove leading newlines.
+                if (receivedString.String->Length >= 2 * 2 &&
+                    receivedString.String->Buffer[0] == '\r' &&
+                    receivedString.String->Buffer[1] == '\n')
+                {
+                    PhRemoveStringBuilder(&receivedString, 0, 2);
+                }
+
+                SetWindowText(context->OutputHandle, receivedString.String->Buffer);
+                SendMessage(
+                    context->OutputHandle,
+                    EM_SETSEL,
+                    receivedString.String->Length / 2 - 1,
+                    receivedString.String->Length / 2 - 1
+                    );
+                SendMessage(context->OutputHandle, WM_VSCROLL, SB_TOP, 0);
+
+                PhDeleteStringBuilder(&receivedString);
+
+                PhDereferenceObject(convertedString);
             }
         }
         break;

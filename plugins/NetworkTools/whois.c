@@ -20,12 +20,8 @@
  * along with Process Hacker.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define _WINSOCK_DEPRECATED_NO_WARNINGS
 #include "nettools.h"
 #include <commonutil.h>
-#include <mxml.h>
-#include <Shlwapi.h>
-#include <winhttp.h>
 
 static PPH_STRING WhoisExtractServerUrl(
     _In_ PPH_STRING WhoisResponce
@@ -72,7 +68,17 @@ static PPH_STRING WhoisExtractReferralServer(
         (ULONG)whoisServerHostnameLength - 17
         );
 
-    return whoisServerName;
+    int port = 80;
+    WCHAR protocal[100];
+    WCHAR address[100];
+    WCHAR page[100];
+
+    swscanf(whoisServerName->Buffer, L"%5s://%99[^:]:%99d/%99[^\n]", protocal, address, &port, page);
+
+    PPH_STRING whoisServerAddress = PhCreateString(address);
+    PhDereferenceObject(whoisServerName);
+
+    return whoisServerAddress;
 }
 
 
@@ -137,6 +143,16 @@ BOOLEAN whois_query(PWSTR WhoisServerAddress, PWSTR query, PPH_STRING* response)
     ADDRINFOW hints;
     ULONG whoisResponceLength = 0;
     PSTR whoisResponce = NULL;
+    CHAR whoisQuery[0x100] = "";
+
+    if (PhEqualStringZ(WhoisServerAddress, L"whois.arin.net", TRUE))
+    {
+        _snprintf_s(whoisQuery, sizeof(whoisQuery), _TRUNCATE, "n %S\r\n", query);
+    }
+    else
+    {
+        _snprintf_s(whoisQuery, sizeof(whoisQuery), _TRUNCATE, "%S\r\n", query);
+    }
 
     if (WSAStartup(WINSOCK_VERSION, &winsockStartup) != ERROR_SUCCESS)
         return FALSE;
@@ -161,14 +177,10 @@ BOOLEAN whois_query(PWSTR WhoisServerAddress, PWSTR query, PPH_STRING* response)
 
         if (connect(socketHandle, ptr->ai_addr, (int)ptr->ai_addrlen) != SOCKET_ERROR)
         {
-            CHAR whoisQuery[0x100] = "";
-
-            sprintf(whoisQuery, "%S\r\n", query);
-
             if (send(socketHandle, whoisQuery, (INT)strlen(whoisQuery), 0) == SOCKET_ERROR)
             {
-                perror("send failed");
-                break;
+                closesocket(socketHandle);
+                continue;
             }
 
             ReadSocketString(socketHandle, &whoisResponce, &whoisResponceLength);
@@ -206,33 +218,32 @@ BOOLEAN get_whois(PWSTR ip, PPH_STRING* data)
 
     if (whoisServerName = WhoisExtractServerUrl(whoisResponse))
     {
-        // <server> found the following authoritative answer from: %s
+        // whois.iana.org found the following authoritative answer from: %s
 
-        if (PhEqualString2(whoisServerName, L"whois.arin.net", TRUE))
+        if (whois_query(whoisServerName->Buffer, ip, &whoisResponse))
         {
-            WCHAR buffer[100] = L"";
-
-            wcscat(buffer, L"n ");
-            wcscat(buffer, ip);
-
-            if (whois_query(whoisServerName->Buffer, buffer, data))
+            // Check if the response contains a referral server.
+            if (whoisReferralServer = WhoisExtractReferralServer(whoisResponse))
             {
+                PPH_STRING oldData = whoisResponse;
+              
+                if (whois_query(whoisReferralServer->Buffer, ip, &whoisResponse))
+                {
+                    *data = whoisResponse;
 
+                    PhDereferenceObject(oldData);
+                    PhDereferenceObject(whoisServerName);
+                    return TRUE;
+                }
+
+                *data = oldData;
             }
-
-            if (whoisReferralServer = WhoisExtractReferralServer(*data))
+            else
             {
-                //if (whois_query(whoisReferralServer->Buffer, buffer, data))
-                //{
-                //    return FALSE;
-                //}
-            }
-        }
-        else
-        {
-            if (!whois_query(whoisServerName->Buffer, ip, data))
-            {
+                *data = whoisResponse;
 
+                PhDereferenceObject(whoisServerName);
+                return TRUE;
             }
         }
 
@@ -248,147 +259,17 @@ BOOLEAN get_whois(PWSTR ip, PPH_STRING* data)
 
 NTSTATUS NetworkWhoisThreadStart(
     _In_ PVOID Parameter
-    )
+)
 {
-    BOOLEAN isSuccess = FALSE;
-    ULONG xmlLength = 0;
-    PSTR xmlBuffer = NULL;
-    PPH_STRING phVersion = NULL;
-    PPH_STRING userAgent = NULL;
-    PPH_STRING whoisHttpGetString = NULL;
-    HINTERNET connectionHandle = NULL;
-    HINTERNET requestHandle = NULL;
-    HINTERNET sessionHandle = NULL;
+    PPH_STRING whoisReply = NULL;
     PNETWORK_OUTPUT_CONTEXT context = NULL;
-    WINHTTP_CURRENT_USER_IE_PROXY_CONFIG proxyConfig = { 0 };
 
-    //4.4.3. IP Addresses and Networks
-    // https://www.arin.net/resources/whoisrws/whois_api.html
-    //TODO: use REF string from /rest/ip/ lookup for querying the IP network: "/rest/net/NET-74-125-0-0-1?showDetails=true"
-    // or use CIDR string from /rest/ip/ lookup for querying the IP network: "/rest/cidr/216.34.181.0/24?showDetails=true
-    //WinHttpAddRequestHeaders(requestHandle, L"application/arin.whoisrws-v1+xml", -1L, 0);
+    context = (PNETWORK_OUTPUT_CONTEXT)Parameter;
 
-    __try
+    if (get_whois(context->IpAddressString, &whoisReply))
     {
-        // Query thread context.
-        if ((context = (PNETWORK_OUTPUT_CONTEXT)Parameter) == NULL)
-            __leave;
-
-        PPH_STRING data = NULL;
-
-        get_whois(context->IpAddressString, &data);
-
-        SendMessage(context->WindowHandle, NTM_RECEIVEDWHOIS, 0, (LPARAM)data);
-        SendMessage(context->WindowHandle, NTM_RECEIVEDFINISH, 0, 0);
-
-        //PhFree(data);
-        __leave;
-
-        // Query PH version.
-        if ((phVersion = PhGetPhVersion()) == NULL)
-            __leave;
-
-        // Create a user agent string.
-        if ((userAgent = PhConcatStrings2(L"Process Hacker ", phVersion->Buffer)) == NULL)
-            __leave;
-
-        // Query the current system proxy
-        WinHttpGetIEProxyConfigForCurrentUser(&proxyConfig);
-
-        // Open the HTTP session with the system proxy configuration if available
-        if (!(sessionHandle = WinHttpOpen(
-            userAgent->Buffer,
-            proxyConfig.lpszProxy != NULL ? WINHTTP_ACCESS_TYPE_NAMED_PROXY : WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-            proxyConfig.lpszProxy,
-            proxyConfig.lpszProxyBypass,
-            0
-            )))
-        {
-            __leave;
-        }
-
-        if (WindowsVersion >= WINDOWS_8_1)
-        {
-            // Enable GZIP and DEFLATE support on Windows 8.1 and above using undocumented flags.
-            ULONG httpFlags = WINHTTP_DECOMPRESSION_FLAG_GZIP | WINHTTP_DECOMPRESSION_FLAG_DEFLATE;
-
-            WinHttpSetOption(
-                sessionHandle,
-                WINHTTP_OPTION_DECOMPRESSION,
-                &httpFlags,
-                sizeof(ULONG)
-                );
-        }
-
-        if (!(connectionHandle = WinHttpConnect(
-            sessionHandle,
-            L"whois.arin.net",
-            INTERNET_DEFAULT_HTTP_PORT,
-            0
-            )))
-        {
-            __leave;
-        }
-
-        if (!(whoisHttpGetString = PhFormatString(L"/rest/ip/%s", context->IpAddressString)))
-            __leave;
-
-        if (!(requestHandle = WinHttpOpenRequest(
-            connectionHandle,
-            NULL,
-            whoisHttpGetString->Buffer,
-            NULL,
-            WINHTTP_NO_REFERER,
-            WINHTTP_DEFAULT_ACCEPT_TYPES,
-            WINHTTP_FLAG_REFRESH
-            )))
-        {
-            __leave;
-        }
-
-        if (!WinHttpAddRequestHeaders(requestHandle, L"Accept: text/plain", -1L, 0))
-            __leave;
-
-        if (!WinHttpSendRequest(
-            requestHandle,
-            WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-            WINHTTP_NO_REQUEST_DATA, 0,
-            WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH, 0
-            ))
-        {
-            __leave;
-        }
-
-        if (!WinHttpReceiveResponse(requestHandle, NULL))
-            __leave;
-
-        //if (!ReadRequestString(requestHandle, &xmlBuffer, &xmlLength))
-        //    __leave;
-
-        PostMessage(context->WindowHandle, NTM_RECEIVEDWHOIS, (WPARAM)xmlLength, (LPARAM)xmlBuffer);
+        PostMessage(context->WindowHandle, NTM_RECEIVEDWHOIS, 0, (LPARAM)whoisReply);
         PostMessage(context->WindowHandle, NTM_RECEIVEDFINISH, 0, 0);
-
-        isSuccess = TRUE;
-    }
-    __finally
-    {
-        if (phVersion)
-            PhDereferenceObject(phVersion);
-
-        if (userAgent)
-            PhDereferenceObject(userAgent);
-
-        if (whoisHttpGetString)
-            PhDereferenceObject(whoisHttpGetString);
-
-        if (requestHandle)
-            WinHttpCloseHandle(requestHandle);
-
-        if (connectionHandle)
-            WinHttpCloseHandle(connectionHandle);
-
-        if (sessionHandle)
-            WinHttpCloseHandle(sessionHandle);
     }
 
     return STATUS_SUCCESS;

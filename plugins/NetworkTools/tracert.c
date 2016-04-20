@@ -567,7 +567,6 @@ static BOOLEAN RunTraceRoute(
  
 
 loop_end:
-    //SendOutputStringFormat(Context, PhFormatString(L"\r\nTrace complete.\r\n")); 
     IcmpCloseHandle(IcmpHandle); 
 
     PostMessage(Context->WindowHandle, NTM_RECEIVEDFINISH, 0, 0);
