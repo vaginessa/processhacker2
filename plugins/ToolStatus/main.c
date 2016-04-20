@@ -236,6 +236,9 @@ PVOID RegisterRebarGraph(
 {
     static ULONG count = 0x1000;
 
+    if (!GraphList)
+        GraphList = PhCreateList(5);
+
     PREBAR_GRAPH_ENTRY rebarGraph = PhAllocate(sizeof(REBAR_GRAPH_ENTRY));
     memset(rebarGraph, 0, sizeof(REBAR_GRAPH_ENTRY));
 
@@ -1362,8 +1365,10 @@ VOID NTAPI LoadCallback(
     DisplayStyle = (TOOLBAR_DISPLAY_STYLE)PhGetIntegerSetting(SETTING_NAME_TOOLBARDISPLAYSTYLE);
     SearchBoxDisplayMode = (SEARCHBOX_DISPLAY_MODE)PhGetIntegerSetting(SETTING_NAME_SEARCHBOXDISPLAYMODE);
     UpdateGraphs = !PhGetIntegerSetting(L"StartHidden");
-    
-    GraphList = PhCreateList(5);
+   
+    if (!GraphList)
+        GraphList = PhCreateList(5);
+
     ToolbarCreateGraphs();
 }
 

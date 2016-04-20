@@ -62,6 +62,9 @@
     <ClCompile Include="disknotify.c">
       <Filter>Source Files\Disk</Filter>
     </ClCompile>
+    <ClCompile Include="diskminigraph.c">
+      <Filter>Source Files\Disk</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="CHANGELOG.txt" />

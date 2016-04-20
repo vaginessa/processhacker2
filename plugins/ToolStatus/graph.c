@@ -22,17 +22,14 @@
 
 #include "toolstatus.h"
 
-HWND CpuGraphHandle = NULL;
-HWND MemGraphHandle = NULL;
-HWND CommitGraphHandle = NULL;
-HWND IoGraphHandle = NULL;
+static HWND CpuGraphHandle = NULL;
+static HWND MemGraphHandle = NULL;
+static HWND CommitGraphHandle = NULL;
+static HWND IoGraphHandle = NULL;
 static PH_GRAPH_STATE CpuGraphState;
 static PH_GRAPH_STATE MemGraphState;
 static PH_GRAPH_STATE CommitGraphState;
 static PH_GRAPH_STATE IoGraphState;
-
-
-
 
 //
 // BEGIN copied from ProcessHacker/sysinfo.c
@@ -178,7 +175,6 @@ static PPH_STRING PhSipGetMaxIoString(
 //
 // END copied from ProcessHacker/sysinfo.c
 //
-
 
 BOOLEAN CpuGraphQueryEnabled(VOID)
 {

@@ -716,4 +716,8 @@ VOID NetAdapterSysInfoInitializing(
     _In_ _Assume_refs_(1) PDV_NETADAPTER_ENTRY AdapterEntry
     );
 
+//
+
+VOID MiniCreateGraphs(VOID);
+
 #endif _DEVICES_H_

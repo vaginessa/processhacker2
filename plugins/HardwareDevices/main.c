@@ -50,6 +50,8 @@ VOID NTAPI LoadCallback(
 
     DiskDrivesLoadList();
     NetAdaptersLoadList();
+
+    MiniCreateGraphs();
 }
 
 VOID NTAPI UnloadCallback(

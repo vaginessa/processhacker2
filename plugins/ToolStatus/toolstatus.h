@@ -296,11 +296,6 @@ HBITMAP LoadImageFromResources(
 
 // graph.c
 
-extern HWND CpuGraphHandle;
-extern HWND MemGraphHandle;
-extern HWND CommitGraphHandle;
-extern HWND IoGraphHandle;
-
 VOID ToolbarCreateGraphs(VOID);
 
 // statusbar.c
